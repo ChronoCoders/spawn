@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/spawn-core",
+    "crates/spawn-ecs",
+    "crates/spawn-platform",
+    "crates/spawn-input",
+    "crates/spawn-render",
+    "crates/spawn-asset",
+    "crates/spawn-audio",
+    "crates/spawn-physics",
+    "crates/spawn-script",
+    "crates/spawn-editor",
+    "crates/spawn-net",
+    "crates/spawn-ui",
+    "crates/spawn-debug",
+    "crates/spawn-build",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BUSL-1.1"
+
+[workspace.lints.rust]
+warnings = "deny"
