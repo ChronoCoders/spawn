@@ -8,6 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-spawn-core = { path = "../spawn-core" }
-spawn-platform = { path = "../spawn-platform" }
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-platform = { path = "../spawn-platform", version = "0.1.0" }
 gilrs = "0.11"

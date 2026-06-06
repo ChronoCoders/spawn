@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-spawn-core = { path = "../spawn-core" }
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
 winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
 # `pump_events` is part of winit's core API on desktop targets (no feature gate).
 raw-window-handle = "0.6"

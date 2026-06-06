@@ -8,5 +8,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-spawn-core = { path = "../spawn-core" }
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
 notify = "6"
