@@ -6,3 +6,8 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+spawn-core = { path = "../spawn-core" }
+spawn-platform = { path = "../spawn-platform" }
+gilrs = "0.11"
