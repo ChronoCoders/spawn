@@ -1,0 +1,248 @@
+//! The [`World`]: entity allocator, component registry, archetype storage, and
+//! a world-level command buffer.
+//!
+//! `World` is `Send` so it can cross thread boundaries between frames, but
+//! parallel access inside a stage is mediated by disjoint borrows, never by
+//! sharing `&mut World`.
+
+use crate::archetype::ArchetypeStore;
+use crate::bundle::Bundle;
+use crate::commands::{Command, CommandBuffer, Commands};
+use crate::component::{
+    column_slice, column_slice_mut, AnyValue, Component, ComponentId, ComponentRegistry,
+};
+use crate::entity::{Entity, EntityAllocator};
+use crate::error::{EcsError, EcsResult};
+use crate::query::{Query, QueryData};
+
+/// Container of all entities, components, and archetype storage.
+pub struct World {
+    allocator: EntityAllocator,
+    registry: ComponentRegistry,
+    archetypes: ArchetypeStore,
+    command_buffer: CommandBuffer,
+}
+
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl World {
+    /// An empty world with no registered components.
+    pub fn new() -> Self {
+        Self {
+            allocator: EntityAllocator::new(),
+            registry: ComponentRegistry::new(),
+            archetypes: ArchetypeStore::new(),
+            command_buffer: CommandBuffer::new(),
+        }
+    }
+
+    pub(crate) fn registry(&self) -> &ComponentRegistry {
+        &self.registry
+    }
+
+    pub(crate) fn allocator(&self) -> &EntityAllocator {
+        &self.allocator
+    }
+
+    /// Registers `T`, returning its dense id. Idempotent: re-registering returns
+    /// the existing id.
+    pub fn register<T: Component>(&mut self) -> ComponentId {
+        self.registry.register::<T>()
+    }
+
+    /// Returns `T`'s id, or `None` if `T` was never registered.
+    pub fn component_id<T: Component>(&self) -> Option<ComponentId> {
+        self.registry.component_id::<T>()
+    }
+
+    pub fn spawn(&mut self) -> Entity {
+        let entity = self.allocator.allocate();
+        self.archetypes.place_empty(entity);
+        entity
+    }
+
+    /// Spawns an entity and inserts `bundle` in one archetype placement.
+    pub fn spawn_with<B: Bundle>(&mut self, bundle: B) -> Entity {
+        let entity = self.allocator.allocate();
+        self.archetypes.place_empty(entity);
+        let pairs = bundle.write_into(&mut self.registry);
+        self.apply_inserts(entity, pairs);
+        entity
+    }
+
+    /// Despawns `entity`, freeing its slot and bumping its generation. Returns
+    /// `EntityNotFound` if it is stale or already dead.
+    pub fn despawn(&mut self, entity: Entity) -> EcsResult<()> {
+        if !self.allocator.is_live(entity) {
+            return Err(EcsError::EntityNotFound { entity });
+        }
+        self.archetypes.remove_entity(entity);
+        self.allocator.free(entity);
+        Ok(())
+    }
+
+    /// Inserts (or overwrites) `value` on `entity`, moving it to the target
+    /// archetype. Returns `EntityNotFound` if the entity is not live.
+    pub fn insert<T: Component>(&mut self, entity: Entity, value: T) -> EcsResult<()> {
+        if !self.allocator.is_live(entity) {
+            return Err(EcsError::EntityNotFound { entity });
+        }
+        let id = self.registry.register::<T>();
+        self.apply_inserts(entity, vec![(id, Box::new(value) as AnyValue)]);
+        Ok(())
+    }
+
+    /// Removes `T` from `entity`. `Ok(None)` if the entity is live but lacks
+    /// `T`; `Err(EntityNotFound)` if it is not live.
+    pub fn remove<T: Component>(&mut self, entity: Entity) -> EcsResult<Option<T>> {
+        if !self.allocator.is_live(entity) {
+            return Err(EcsError::EntityNotFound { entity });
+        }
+        let id = match self.registry.component_id::<T>() {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+        let removed = self.apply_remove(entity, id);
+        Ok(removed.and_then(|boxed| boxed.downcast::<T>().ok().map(|b| *b)))
+    }
+
+    pub fn contains(&self, entity: Entity) -> bool {
+        self.allocator.is_live(entity)
+    }
+
+    pub fn has<T: Component>(&self, entity: Entity) -> bool {
+        let id = match self.registry.component_id::<T>() {
+            Some(id) => id,
+            None => return false,
+        };
+        match self.archetypes.location(entity) {
+            Some((aid, _)) => self.archetypes.archetype(aid).contains(id),
+            None => false,
+        }
+    }
+
+    /// Borrows `entity`'s `T`. `None` if the entity is not live or lacks `T`.
+    pub fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
+        if !self.allocator.is_live(entity) {
+            return None;
+        }
+        let id = self.registry.component_id::<T>()?;
+        let (aid, row) = self.archetypes.location(entity)?;
+        let column = self.archetypes.archetype(aid).column(id)?;
+        column_slice::<T>(column)?.get(row)
+    }
+
+    /// Mutably borrows `entity`'s `T`. `None` if not live or lacking `T`.
+    pub fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
+        if !self.allocator.is_live(entity) {
+            return None;
+        }
+        let id = self.registry.component_id::<T>()?;
+        let (aid, row) = self.archetypes.location(entity)?;
+        let column = self.archetypes.archetype_mut(aid).column_mut(id)?;
+        column_slice_mut::<T>(column)?.get_mut(row)
+    }
+
+    pub fn entity_count(&self) -> usize {
+        self.allocator.live_count()
+    }
+
+    /// Archetype count, including the always-present empty archetype. For
+    /// tests/metrics.
+    pub fn archetype_count(&self) -> usize {
+        self.archetypes.count()
+    }
+
+    /// A read-only query; `Q` must be read-only data.
+    pub fn query<Q: QueryData>(&self) -> Query<'_, Q, ()> {
+        Query::new_shared(&self.archetypes, &self.registry)
+    }
+
+    /// A query permitting `&mut T` data.
+    pub fn query_mut<Q: QueryData>(&mut self) -> Query<'_, Q, ()> {
+        Query::new_exclusive(&mut self.archetypes, &self.registry)
+    }
+
+    pub(crate) fn query_param<Q: QueryData, F: crate::query::filter::QueryFilter>(
+        &self,
+    ) -> Query<'_, Q, F> {
+        Query::new_shared(&self.archetypes, &self.registry)
+    }
+
+    /// A world-level command buffer; queued ops are applied by
+    /// [`apply_commands`](World::apply_commands).
+    pub fn commands(&mut self) -> Commands<'_> {
+        Commands::new(&mut self.command_buffer, &self.allocator, &self.registry)
+    }
+
+    /// Applies the world-level command buffer in recorded order.
+    pub fn apply_commands(&mut self) {
+        let mut taken = std::mem::take(&mut self.command_buffer);
+        self.apply_buffer(&mut taken);
+        taken.clear();
+        self.command_buffer = taken;
+    }
+
+    pub(crate) fn apply_buffer(&mut self, buffer: &mut CommandBuffer) {
+        for command in buffer.drain() {
+            match command {
+                Command::Spawn { entity, components } => {
+                    if self.allocator.materialize(entity) {
+                        self.archetypes.place_empty(entity);
+                        if !components.is_empty() {
+                            self.apply_inserts(entity, components);
+                        }
+                    }
+                }
+                Command::Despawn { entity } => {
+                    if self.allocator.is_live(entity) {
+                        self.archetypes.remove_entity(entity);
+                        self.allocator.free(entity);
+                    }
+                }
+                Command::Insert {
+                    entity,
+                    component,
+                    value,
+                } => {
+                    if self.allocator.is_live(entity) {
+                        self.apply_inserts(entity, vec![(component, value)]);
+                    }
+                }
+                Command::Remove { entity, component } => {
+                    if self.allocator.is_live(entity) {
+                        self.apply_remove(entity, component);
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_inserts(&mut self, entity: Entity, pairs: Vec<(ComponentId, AnyValue)>) {
+        let registry = &self.registry;
+        self.archetypes
+            .insert_components(entity, pairs, |cid| new_column(registry, cid));
+    }
+
+    fn apply_remove(&mut self, entity: Entity, id: ComponentId) -> Option<AnyValue> {
+        let registry = &self.registry;
+        self.archetypes
+            .remove_component(entity, id, |cid| new_column(registry, cid))
+    }
+}
+
+/// Builds a fresh column for a registered id. Falls back to a zero-sized unit
+/// column for an unregistered id (which the archetype layer never stores into),
+/// keeping the factory total without panicking.
+fn new_column(
+    registry: &ComponentRegistry,
+    id: ComponentId,
+) -> Box<dyn crate::component::ComponentColumn> {
+    registry
+        .new_column(id)
+        .unwrap_or_else(crate::component::unit_column)
+}

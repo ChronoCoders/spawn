@@ -25,6 +25,9 @@ version = "0.1.0"
 [[package]]
 name = "spawn-ecs"
 version = "0.1.0"
+dependencies = [
+ "spawn-core",
+]
 
 [[package]]
 name = "spawn-editor"
