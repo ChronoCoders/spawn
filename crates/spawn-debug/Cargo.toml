@@ -4,5 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+spawn-core = { path = "../spawn-core" }
+
+[features]
+default = ["max_level_trace"]
+max_level_off = []
+max_level_error = []
+max_level_warn = []
+max_level_info = []
+max_level_debug = []
+max_level_trace = []
+
 [lints]
 workspace = true
