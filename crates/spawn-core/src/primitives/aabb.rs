@@ -10,20 +10,17 @@ use crate::primitives::Rect;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct AABB2 {
-    /// Minimum corner.
     pub min: Vec2,
-    /// Maximum corner (inclusive).
     pub max: Vec2,
 }
 
 impl AABB2 {
-    /// Creates a box from explicit corners. The caller upholds `min ≤ max`.
+    /// The caller upholds `min ≤ max`.
     pub const fn new(min: Vec2, max: Vec2) -> Self {
         Self { min, max }
     }
 
-    /// Creates the smallest box enclosing all `points`, or `None` if the slice
-    /// is empty.
+    /// `None` if the slice is empty.
     pub fn from_points(points: &[Vec2]) -> Option<Self> {
         let mut iter = points.iter();
         let first = *iter.next()?;
@@ -36,7 +33,6 @@ impl AABB2 {
         Some(Self { min, max })
     }
 
-    /// Creates a box from a center and half-extents.
     pub fn from_center_half_extents(center: Vec2, half: Vec2) -> Self {
         Self {
             min: center - half,
@@ -44,23 +40,20 @@ impl AABB2 {
         }
     }
 
-    /// Returns the center point.
     pub fn center(self) -> Vec2 {
         (self.min + self.max) * 0.5
     }
 
-    /// Returns the half-extents (half the size along each axis).
     pub fn half_extents(self) -> Vec2 {
         (self.max - self.min) * 0.5
     }
 
-    /// Returns `true` if the point lies inside the box (inclusive on all
-    /// bounds).
+    /// Inclusive on all bounds.
     pub fn contains_point(self, p: Vec2) -> bool {
         p.x >= self.min.x && p.x <= self.max.x && p.y >= self.min.y && p.y <= self.max.y
     }
 
-    /// Returns `true` if `rhs` is fully contained within `self` (inclusive).
+    /// Inclusive.
     pub fn contains_aabb(self, rhs: Self) -> bool {
         rhs.min.x >= self.min.x
             && rhs.max.x <= self.max.x
@@ -68,8 +61,7 @@ impl AABB2 {
             && rhs.max.y <= self.max.y
     }
 
-    /// Returns `true` if the two boxes overlap, including when they only touch
-    /// (inclusive).
+    /// Inclusive: touching faces count as intersecting.
     pub fn intersects(self, rhs: Self) -> bool {
         self.min.x <= rhs.max.x
             && self.max.x >= rhs.min.x
@@ -77,7 +69,7 @@ impl AABB2 {
             && self.max.y >= rhs.min.y
     }
 
-    /// Returns the overlapping box, or `None` if the boxes are disjoint.
+    /// `None` if the boxes are disjoint.
     pub fn intersection(self, rhs: Self) -> Option<Self> {
         let min = self.min.max(rhs.min);
         let max = self.max.min(rhs.max);
@@ -88,7 +80,6 @@ impl AABB2 {
         }
     }
 
-    /// Returns the smallest box covering both inputs.
     pub fn union(self, rhs: Self) -> Self {
         Self {
             min: self.min.min(rhs.min),
@@ -96,7 +87,6 @@ impl AABB2 {
         }
     }
 
-    /// Returns the smallest box covering `self` and the point `p`.
     pub fn union_point(self, p: Vec2) -> Self {
         Self {
             min: self.min.min(p),
@@ -104,14 +94,12 @@ impl AABB2 {
         }
     }
 
-    /// Returns the point within the box closest to `p` (clamps `p` to the
-    /// box). Returns `p` itself when already inside.
+    /// Clamps `p` to the box; returns `p` itself when already inside.
     pub fn closest_point(self, p: Vec2) -> Vec2 {
         p.clamp(self.min, self.max)
     }
 
-    /// Returns the box grown outward by `amount` on every side. Negative values
-    /// shrink it.
+    /// Negative `amount` shrinks.
     pub fn expand(self, amount: f32) -> Self {
         let d = Vec2::splat(amount);
         Self {
@@ -126,20 +114,17 @@ impl AABB2 {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct AABB3 {
-    /// Minimum corner.
     pub min: Vec3,
-    /// Maximum corner (inclusive).
     pub max: Vec3,
 }
 
 impl AABB3 {
-    /// Creates a box from explicit corners. The caller upholds `min ≤ max`.
+    /// The caller upholds `min ≤ max`.
     pub const fn new(min: Vec3, max: Vec3) -> Self {
         Self { min, max }
     }
 
-    /// Creates the smallest box enclosing all `points`, or `None` if the slice
-    /// is empty.
+    /// `None` if the slice is empty.
     pub fn from_points(points: &[Vec3]) -> Option<Self> {
         let mut iter = points.iter();
         let first = *iter.next()?;
@@ -152,7 +137,6 @@ impl AABB3 {
         Some(Self { min, max })
     }
 
-    /// Creates a box from a center and half-extents.
     pub fn from_center_half_extents(center: Vec3, half: Vec3) -> Self {
         Self {
             min: center - half,
@@ -160,18 +144,15 @@ impl AABB3 {
         }
     }
 
-    /// Returns the center point.
     pub fn center(self) -> Vec3 {
         (self.min + self.max) * 0.5
     }
 
-    /// Returns the half-extents (half the size along each axis).
     pub fn half_extents(self) -> Vec3 {
         (self.max - self.min) * 0.5
     }
 
-    /// Returns `true` if the point lies inside the box (inclusive on all
-    /// bounds).
+    /// Inclusive on all bounds.
     pub fn contains_point(self, p: Vec3) -> bool {
         p.x >= self.min.x
             && p.x <= self.max.x
@@ -181,7 +162,7 @@ impl AABB3 {
             && p.z <= self.max.z
     }
 
-    /// Returns `true` if `rhs` is fully contained within `self` (inclusive).
+    /// Inclusive.
     pub fn contains_aabb(self, rhs: Self) -> bool {
         rhs.min.x >= self.min.x
             && rhs.max.x <= self.max.x
@@ -191,8 +172,7 @@ impl AABB3 {
             && rhs.max.z <= self.max.z
     }
 
-    /// Returns `true` if the two boxes overlap, including when they only touch
-    /// (inclusive).
+    /// Inclusive: touching faces count as intersecting.
     pub fn intersects(self, rhs: Self) -> bool {
         self.min.x <= rhs.max.x
             && self.max.x >= rhs.min.x
@@ -202,7 +182,7 @@ impl AABB3 {
             && self.max.z >= rhs.min.z
     }
 
-    /// Returns the overlapping box, or `None` if the boxes are disjoint.
+    /// `None` if the boxes are disjoint.
     pub fn intersection(self, rhs: Self) -> Option<Self> {
         let min = self.min.max(rhs.min);
         let max = self.max.min(rhs.max);
@@ -213,7 +193,6 @@ impl AABB3 {
         }
     }
 
-    /// Returns the smallest box covering both inputs.
     pub fn union(self, rhs: Self) -> Self {
         Self {
             min: self.min.min(rhs.min),
@@ -221,7 +200,6 @@ impl AABB3 {
         }
     }
 
-    /// Returns the smallest box covering `self` and the point `p`.
     pub fn union_point(self, p: Vec3) -> Self {
         Self {
             min: self.min.min(p),
@@ -229,14 +207,12 @@ impl AABB3 {
         }
     }
 
-    /// Returns the point within the box closest to `p` (clamps `p` to the
-    /// box). Returns `p` itself when already inside.
+    /// Clamps `p` to the box; returns `p` itself when already inside.
     pub fn closest_point(self, p: Vec3) -> Vec3 {
         p.clamp(self.min, self.max)
     }
 
-    /// Returns the box grown outward by `amount` on every side. Negative values
-    /// shrink it.
+    /// Negative `amount` shrinks.
     pub fn expand(self, amount: f32) -> Self {
         let d = Vec3::splat(amount);
         Self {
@@ -245,13 +221,11 @@ impl AABB3 {
         }
     }
 
-    /// Returns the total surface area of the box.
     pub fn surface_area(self) -> f32 {
         let d = self.max - self.min;
         2.0 * (d.x * d.y + d.y * d.z + d.z * d.x)
     }
 
-    /// Returns the volume of the box.
     pub fn volume(self) -> f32 {
         let d = self.max - self.min;
         d.x * d.y * d.z

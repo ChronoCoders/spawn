@@ -3,21 +3,16 @@
 use crate::math::{Quat, Vec3, Vec4};
 use std::ops::{Add, Mul, Sub};
 
-/// A 4x4 matrix stored in column-major order as four column vectors.
-///
-/// Used for 3D affine and projective transforms. Column vectors are
-/// transformed as `M * v`.
+/// Column-major; the four column vectors. Column vectors transform as `M * v`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mat4 {
-    /// The four column vectors of the matrix.
     pub cols: [Vec4; 4],
 }
 
 const _: () = assert!(std::mem::size_of::<Mat4>() == 64);
 
 impl Mat4 {
-    /// The identity matrix.
     pub const IDENTITY: Self = Self {
         cols: [
             Vec4::new(1.0, 0.0, 0.0, 0.0),
@@ -27,7 +22,6 @@ impl Mat4 {
         ],
     };
 
-    /// The zero matrix (all components zero).
     pub const ZERO: Self = Self {
         cols: [
             Vec4::new(0.0, 0.0, 0.0, 0.0),
@@ -37,14 +31,12 @@ impl Mat4 {
         ],
     };
 
-    /// Creates a matrix from its four column vectors.
     pub const fn from_cols(c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4) -> Self {
         Self {
             cols: [c0, c1, c2, c3],
         }
     }
 
-    /// Creates a diagonal matrix from the given diagonal entries.
     pub fn from_diagonal(d: Vec4) -> Self {
         Self {
             cols: [
@@ -56,7 +48,6 @@ impl Mat4 {
         }
     }
 
-    /// Creates a translation matrix.
     pub fn from_translation(t: Vec3) -> Self {
         Self {
             cols: [
@@ -68,7 +59,6 @@ impl Mat4 {
         }
     }
 
-    /// Creates a non-uniform scale matrix.
     pub fn from_scale(s: Vec3) -> Self {
         Self {
             cols: [
@@ -80,7 +70,6 @@ impl Mat4 {
         }
     }
 
-    /// Creates a rotation matrix about the X axis (radians).
     pub fn from_rotation_x(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
         Self {
@@ -93,7 +82,6 @@ impl Mat4 {
         }
     }
 
-    /// Creates a rotation matrix about the Y axis (radians).
     pub fn from_rotation_y(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
         Self {
@@ -106,7 +94,6 @@ impl Mat4 {
         }
     }
 
-    /// Creates a rotation matrix about the Z axis (radians).
     pub fn from_rotation_z(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
         Self {
@@ -119,7 +106,7 @@ impl Mat4 {
         }
     }
 
-    /// Creates a rotation matrix from a quaternion (assumed unit length).
+    /// `q` is assumed unit length.
     pub fn from_quat(q: Quat) -> Self {
         let (x, y, z, w) = (q.x, q.y, q.z, q.w);
         let (xx, yy, zz) = (x * x, y * y, z * z);
@@ -135,7 +122,7 @@ impl Mat4 {
         }
     }
 
-    /// Composes a transform from scale, then rotation, then translation (TRS).
+    /// Composes scale, then rotation, then translation (TRS).
     pub fn from_scale_rotation_translation(s: Vec3, r: Quat, t: Vec3) -> Self {
         let rot = Self::from_quat(r);
         Self {
@@ -148,8 +135,8 @@ impl Mat4 {
         }
     }
 
-    /// Creates a right-handed look-at view matrix, or `None` if the inputs are
-    /// degenerate (`eye == target`, or `up` parallel to the view direction).
+    /// Right-handed. `None` if degenerate (`eye == target`, or `up` parallel to
+    /// the view direction).
     pub fn look_at_rh(eye: Vec3, target: Vec3, up: Vec3) -> Option<Self> {
         let f = (target - eye).normalize()?;
         let s = f.cross(up).normalize()?;
@@ -164,10 +151,9 @@ impl Mat4 {
         })
     }
 
-    /// Creates a right-handed perspective projection matrix with depth range
-    /// `[0, 1]` (wgpu convention). Returns `None` if any of `fov_y_radians`,
-    /// `aspect`, `z_near`, `z_far` is non-positive or non-finite, or if
-    /// `z_near >= z_far`.
+    /// Right-handed, depth range `[0, 1]` (wgpu convention). `None` if any of
+    /// `fov_y_radians`, `aspect`, `z_near`, `z_far` is non-positive or
+    /// non-finite, or if `z_near >= z_far`.
     pub fn perspective_rh(
         fov_y_radians: f32,
         aspect: f32,
@@ -197,10 +183,9 @@ impl Mat4 {
         })
     }
 
-    /// Creates a right-handed orthographic projection matrix with depth range
-    /// `[0, 1]` (wgpu convention). Returns `None` on degenerate extents
-    /// (`left == right`, `bottom == top`, `z_near == z_far`) or non-finite
-    /// inputs.
+    /// Right-handed, depth range `[0, 1]` (wgpu convention). `None` on
+    /// degenerate extents (`left == right`, `bottom == top`, `z_near == z_far`)
+    /// or non-finite inputs.
     pub fn orthographic_rh(
         left: f32,
         right: f32,
@@ -234,12 +219,12 @@ impl Mat4 {
         })
     }
 
-    /// Returns column `i`, or `None` if out of range.
+    /// `None` if `i` is out of range.
     pub fn col(self, i: usize) -> Option<Vec4> {
         self.cols.get(i).copied()
     }
 
-    /// Returns row `i`, or `None` if out of range.
+    /// `None` if `i` is out of range.
     pub fn row(self, i: usize) -> Option<Vec4> {
         match i {
             0 => Some(Vec4::new(
@@ -270,7 +255,6 @@ impl Mat4 {
         }
     }
 
-    /// Returns the transpose of this matrix.
     pub fn transpose(self) -> Self {
         Self {
             cols: [
@@ -302,7 +286,6 @@ impl Mat4 {
         }
     }
 
-    /// Returns the determinant of this matrix.
     pub fn determinant(self) -> f32 {
         let m = &self.cols;
         let (m00, m10, m20, m30) = (m[0].x, m[0].y, m[0].z, m[0].w);
@@ -323,8 +306,7 @@ impl Mat4 {
             - m03 * (m10 * a1223 - m11 * a0223 + m12 * a0123)
     }
 
-    /// Returns the inverse of this matrix, or `None` if it is singular
-    /// (`|det| < 1e-12`).
+    /// `None` if singular (`|det| < 1e-12`).
     pub fn inverse(self) -> Option<Self> {
         let m = &self.cols;
         let (m00, m10, m20, m30) = (m[0].x, m[0].y, m[0].z, m[0].w);
@@ -391,14 +373,14 @@ impl Mat4 {
         })
     }
 
-    /// Transforms a point (implicit `w = 1`), without the perspective divide.
+    /// Implicit `w = 1`, no perspective divide.
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         let r = self * Vec4::new(p.x, p.y, p.z, 1.0);
         Vec3::new(r.x, r.y, r.z)
     }
 
-    /// Transforms a point as `w = 1` and applies the perspective divide.
-    /// Returns `None` if the resulting `w` is near zero (`|w| < 1e-12`).
+    /// Implicit `w = 1` with perspective divide. `None` if the resulting `w` is
+    /// near zero (`|w| < 1e-12`).
     pub fn project_point(self, p: Vec3) -> Option<Vec3> {
         let r = self * Vec4::new(p.x, p.y, p.z, 1.0);
         if r.w.abs() < 1e-12 {
@@ -408,13 +390,12 @@ impl Mat4 {
         Some(Vec3::new(r.x * inv_w, r.y * inv_w, r.z * inv_w))
     }
 
-    /// Transforms a direction vector (implicit `w = 0`); ignores translation.
+    /// Implicit `w = 0`; ignores translation.
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         let r = self * Vec4::new(v.x, v.y, v.z, 0.0);
         Vec3::new(r.x, r.y, r.z)
     }
 
-    /// Returns `true` if every component of the matrix is finite.
     pub fn is_finite(self) -> bool {
         self.cols[0].is_finite()
             && self.cols[1].is_finite()

@@ -14,10 +14,9 @@ pub use vec2::Vec2;
 pub use vec3::Vec3;
 pub use vec4::Vec4;
 
-/// Shared default epsilon for approximate float comparison.
 pub const EPSILON: f32 = 1e-6;
 
-/// Linearly interpolates between `a` and `b` by `t` (unclamped).
+/// Unclamped.
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }

@@ -8,10 +8,9 @@ use crate::primitives::{Color, Transform2D, Transform3D};
 /// This is the only sanctioned float-comparison path. Comparison is componentwise on the
 /// absolute difference: each pair of components is equal when `(a - b).abs() <= epsilon`.
 pub trait ApproxEq {
-    /// Returns `true` if `self` and `rhs` are equal within `epsilon` per component.
     fn approx_eq(self, rhs: Self, epsilon: f32) -> bool;
 
-    /// Returns `true` if `self` and `rhs` are equal within the default epsilon.
+    /// Uses the default epsilon ([`math::EPSILON`]).
     fn approx_eq_default(self, rhs: Self) -> bool
     where
         Self: Sized,
@@ -100,9 +99,9 @@ impl ApproxEq for Transform3D {
     }
 }
 
-/// Unclamped linear interpolation.
+/// Unclamped linear interpolation. Not implemented for [`Quat`] (use
+/// `slerp`/`nlerp`; componentwise quaternion lerp is a correctness trap).
 pub trait Lerp {
-    /// Returns the unclamped linear interpolation between `self` and `rhs` by `t`.
     fn lerp(self, rhs: Self, t: f32) -> Self;
 }
 

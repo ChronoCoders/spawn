@@ -4,13 +4,10 @@ use core::ops::{
 
 use crate::math::Vec3;
 
-/// A 2-component vector of `f32`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vec2 {
-    /// The x component.
     pub x: f32,
-    /// The y component.
     pub y: f32,
 }
 
@@ -18,65 +15,52 @@ const _: () = assert!(std::mem::size_of::<Vec2>() == 8);
 const _: () = assert!(std::mem::align_of::<Vec2>() == 4);
 
 impl Vec2 {
-    /// The zero vector.
     pub const ZERO: Self = Self::new(0.0, 0.0);
-    /// The vector with all components set to one.
     pub const ONE: Self = Self::new(1.0, 1.0);
-    /// The unit vector along the x axis.
     pub const X: Self = Self::new(1.0, 0.0);
-    /// The unit vector along the y axis.
     pub const Y: Self = Self::new(0.0, 1.0);
-    /// The negative unit vector along the x axis.
     pub const NEG_X: Self = Self::new(-1.0, 0.0);
-    /// The negative unit vector along the y axis.
     pub const NEG_Y: Self = Self::new(0.0, -1.0);
 
-    /// Creates a new vector from its components.
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 
-    /// Creates a vector with all components set to `v`.
     pub fn splat(v: f32) -> Self {
         Self::new(v, v)
     }
 
-    /// Returns the dot product of `self` and `rhs`.
     pub fn dot(self, rhs: Self) -> f32 {
         self.x * rhs.x + self.y * rhs.y
     }
 
-    /// Returns `self` rotated 90 degrees counter-clockwise: `(-y, x)`.
+    /// 90° CCW rotation: `(-y, x)`.
     pub fn perp(self) -> Self {
         Self::new(-self.y, self.x)
     }
 
-    /// Returns the 2D cross product (z component of the 3D cross product).
+    /// 2D cross product (z of the 3D cross product).
     pub fn perp_dot(self, rhs: Self) -> f32 {
         self.x * rhs.y - self.y * rhs.x
     }
 
-    /// Returns the Euclidean length of the vector.
     pub fn length(self) -> f32 {
         self.length_squared().sqrt()
     }
 
-    /// Returns the squared length of the vector.
     pub fn length_squared(self) -> f32 {
         self.dot(self)
     }
 
-    /// Returns the Euclidean distance between `self` and `rhs`.
     pub fn distance(self, rhs: Self) -> f32 {
         (self - rhs).length()
     }
 
-    /// Returns the squared distance between `self` and `rhs`.
     pub fn distance_squared(self, rhs: Self) -> f32 {
         (self - rhs).length_squared()
     }
 
-    /// Returns the normalized vector, or `None` if its length is below `1e-12`.
+    /// `None` if length is below `1e-12`.
     pub fn normalize(self) -> Option<Self> {
         let len = self.length();
         if len < 1e-12 {
@@ -86,47 +70,39 @@ impl Vec2 {
         }
     }
 
-    /// Returns the normalized vector, or the zero vector if it cannot be normalized.
     pub fn normalize_or_zero(self) -> Self {
         self.normalize().unwrap_or(Self::ZERO)
     }
 
-    /// Returns the unclamped linear interpolation between `self` and `rhs` by `t`.
+    /// Unclamped.
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
         self + (rhs - self) * t
     }
 
-    /// Returns the componentwise minimum of `self` and `rhs`.
     pub fn min(self, rhs: Self) -> Self {
         Self::new(self.x.min(rhs.x), self.y.min(rhs.y))
     }
 
-    /// Returns the componentwise maximum of `self` and `rhs`.
     pub fn max(self, rhs: Self) -> Self {
         Self::new(self.x.max(rhs.x), self.y.max(rhs.y))
     }
 
-    /// Returns `self` clamped componentwise between `min` and `max`.
     pub fn clamp(self, min: Self, max: Self) -> Self {
         self.max(min).min(max)
     }
 
-    /// Returns the componentwise absolute value.
     pub fn abs(self) -> Self {
         Self::new(self.x.abs(), self.y.abs())
     }
 
-    /// Extends `self` to a [`Vec3`] with the given `z` component.
     pub fn extend(self, z: f32) -> Vec3 {
         Vec3::new(self.x, self.y, z)
     }
 
-    /// Returns the components as an array.
     pub fn as_array(self) -> [f32; 2] {
         [self.x, self.y]
     }
 
-    /// Returns `true` if all components are finite.
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }

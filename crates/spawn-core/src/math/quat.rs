@@ -10,18 +10,13 @@ use std::ops::{Mul, Neg};
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quat {
-    /// `i` component of the vector part.
     pub x: f32,
-    /// `j` component of the vector part.
     pub y: f32,
-    /// `k` component of the vector part.
     pub z: f32,
-    /// Scalar part.
     pub w: f32,
 }
 
 impl Quat {
-    /// The identity rotation `(0, 0, 0, 1)`.
     pub const IDENTITY: Self = Self {
         x: 0.0,
         y: 0.0,
@@ -29,15 +24,11 @@ impl Quat {
         w: 1.0,
     };
 
-    /// Creates a quaternion from raw components, with `w` the scalar part.
     pub const fn from_xyzw(x: f32, y: f32, z: f32, w: f32) -> Self {
         Self { x, y, z, w }
     }
 
-    /// Creates a rotation of `radians` about `axis`.
-    ///
-    /// The axis is normalized internally. Returns `None` if `axis` is near zero
-    /// (length below `1e-12`).
+    /// Normalizes `axis` internally. `None` if `axis` is near zero (length below `1e-12`).
     pub fn from_axis_angle(axis: Vec3, radians: f32) -> Option<Self> {
         let axis = axis.normalize()?;
         let half = radians * 0.5;
@@ -50,7 +41,6 @@ impl Quat {
         })
     }
 
-    /// Creates a rotation of `radians` about the X axis.
     pub fn from_rotation_x(radians: f32) -> Self {
         let half = radians * 0.5;
         Self {
@@ -61,7 +51,6 @@ impl Quat {
         }
     }
 
-    /// Creates a rotation of `radians` about the Y axis.
     pub fn from_rotation_y(radians: f32) -> Self {
         let half = radians * 0.5;
         Self {
@@ -72,7 +61,6 @@ impl Quat {
         }
     }
 
-    /// Creates a rotation of `radians` about the Z axis.
     pub fn from_rotation_z(radians: f32) -> Self {
         let half = radians * 0.5;
         Self {
@@ -83,8 +71,6 @@ impl Quat {
         }
     }
 
-    /// Creates a rotation from intrinsic XYZ Euler angles (radians).
-    ///
     /// Intrinsic XYZ: rotate about body X, then the new body Y, then the new body Z.
     /// For column vectors this composes as `from_rotation_x(x) * from_rotation_y(y)
     /// * from_rotation_z(z)`, i.e. the Z rotation is applied to a vector first.
@@ -92,10 +78,7 @@ impl Quat {
         Self::from_rotation_x(x) * Self::from_rotation_y(y) * Self::from_rotation_z(z)
     }
 
-    /// Returns the `(axis, angle)` representation of this rotation.
-    ///
-    /// The angle is in radians within `[0, PI]` and the axis is unit length.
-    /// The identity (or a near-identity rotation) returns `(Vec3::X, 0.0)`.
+    /// Angle in `[0, PI]`, axis unit length. Identity (or near-identity) returns `(Vec3::X, 0.0)`.
     pub fn to_axis_angle(self) -> (Vec3, f32) {
         let q = self.normalize().unwrap_or(Self::IDENTITY);
         let w = q.w.clamp(-1.0, 1.0);
@@ -109,22 +92,19 @@ impl Quat {
         (axis, angle)
     }
 
-    /// Returns the four-component dot product with `rhs`.
     pub fn dot(self, rhs: Self) -> f32 {
         self.x * rhs.x + self.y * rhs.y + self.z * rhs.z + self.w * rhs.w
     }
 
-    /// Returns the magnitude of this quaternion.
     pub fn length(self) -> f32 {
         self.length_squared().sqrt()
     }
 
-    /// Returns the squared magnitude of this quaternion.
     pub fn length_squared(self) -> f32 {
         self.dot(self)
     }
 
-    /// Returns this quaternion scaled to unit length, or `None` if its length is below `1e-12`.
+    /// `None` if length is below `1e-12`.
     pub fn normalize(self) -> Option<Self> {
         let len = self.length();
         if len < 1e-12 {
@@ -140,8 +120,6 @@ impl Quat {
         }
     }
 
-    /// Returns the conjugate `(-x, -y, -z, w)`.
-    ///
     /// For a unit quaternion this equals the inverse rotation.
     pub fn conjugate(self) -> Self {
         Self {
@@ -152,7 +130,7 @@ impl Quat {
         }
     }
 
-    /// Returns the multiplicative inverse `conjugate / length²`, or `None` if near zero.
+    /// `conjugate / length²`; `None` if near zero.
     pub fn inverse(self) -> Option<Self> {
         let len_sq = self.length_squared();
         if len_sq < 1e-12 {
@@ -169,10 +147,8 @@ impl Quat {
         }
     }
 
-    /// Spherically interpolates from `self` to `rhs` by `t` along the shortest path.
-    ///
-    /// Falls back to [`Quat::nlerp`] when the endpoints are nearly parallel
-    /// (`|dot| > 0.9995`) to avoid division by a near-zero `sin`.
+    /// Shortest path. Falls back to [`Quat::nlerp`] when the endpoints are nearly
+    /// parallel (`|dot| > 0.9995`) to avoid division by a near-zero `sin`.
     pub fn slerp(self, rhs: Self, t: f32) -> Self {
         let mut dot = self.dot(rhs);
         let mut end = rhs;
@@ -197,7 +173,7 @@ impl Quat {
         }
     }
 
-    /// Normalized linear interpolation from `self` to `rhs` by `t` along the shortest path.
+    /// Shortest path.
     pub fn nlerp(self, rhs: Self, t: f32) -> Self {
         let mut end = rhs;
         if self.dot(rhs) < 0.0 {
@@ -212,19 +188,18 @@ impl Quat {
         result.normalize().unwrap_or(Self::IDENTITY)
     }
 
-    /// Rotates `v` by this quaternion, assuming it is unit length.
+    /// Assumes a unit quaternion.
     pub fn rotate(self, v: Vec3) -> Vec3 {
         let u = Vec3::new(self.x, self.y, self.z);
         let t = u.cross(v) * 2.0;
         v + t * self.w + u.cross(t)
     }
 
-    /// Returns `true` if this quaternion is within `1e-4` of unit length (`|len² − 1| < 1e-4`).
+    /// `|len² − 1| < 1e-4`.
     pub fn is_normalized(self) -> bool {
         (self.length_squared() - 1.0).abs() < 1e-4
     }
 
-    /// Returns `true` if all components are finite.
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite() && self.w.is_finite()
     }
@@ -239,7 +214,7 @@ impl Default for Quat {
 impl Mul<Quat> for Quat {
     type Output = Quat;
 
-    /// Hamilton product: the result applies `rhs` first, then `self`.
+    /// Hamilton product: applies `rhs` first, then `self`.
     fn mul(self, rhs: Quat) -> Quat {
         Quat {
             x: self.w * rhs.x + self.x * rhs.w + self.y * rhs.z - self.z * rhs.y,
@@ -253,7 +228,7 @@ impl Mul<Quat> for Quat {
 impl Mul<Vec3> for Quat {
     type Output = Vec3;
 
-    /// Rotates `rhs` by this quaternion, assuming it is unit length.
+    /// Assumes a unit quaternion.
     fn mul(self, rhs: Vec3) -> Vec3 {
         self.rotate(rhs)
     }

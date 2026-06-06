@@ -4,15 +4,11 @@ use core::ops::{
 
 use crate::math::{Vec2, Vec4};
 
-/// A 3-component vector of `f32`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vec3 {
-    /// The x component.
     pub x: f32,
-    /// The y component.
     pub y: f32,
-    /// The z component.
     pub z: f32,
 }
 
@@ -20,39 +16,27 @@ const _: () = assert!(std::mem::size_of::<Vec3>() == 12);
 const _: () = assert!(std::mem::align_of::<Vec3>() == 4);
 
 impl Vec3 {
-    /// The zero vector.
     pub const ZERO: Self = Self::new(0.0, 0.0, 0.0);
-    /// The vector with all components set to one.
     pub const ONE: Self = Self::new(1.0, 1.0, 1.0);
-    /// The unit vector along the x axis.
     pub const X: Self = Self::new(1.0, 0.0, 0.0);
-    /// The unit vector along the y axis.
     pub const Y: Self = Self::new(0.0, 1.0, 0.0);
-    /// The unit vector along the z axis.
     pub const Z: Self = Self::new(0.0, 0.0, 1.0);
-    /// The negative unit vector along the x axis.
     pub const NEG_X: Self = Self::new(-1.0, 0.0, 0.0);
-    /// The negative unit vector along the y axis.
     pub const NEG_Y: Self = Self::new(0.0, -1.0, 0.0);
-    /// The negative unit vector along the z axis.
     pub const NEG_Z: Self = Self::new(0.0, 0.0, -1.0);
 
-    /// Creates a new vector from its components.
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }
 
-    /// Creates a vector with all components set to `v`.
     pub fn splat(v: f32) -> Self {
         Self::new(v, v, v)
     }
 
-    /// Returns the dot product of `self` and `rhs`.
     pub fn dot(self, rhs: Self) -> f32 {
         self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
     }
 
-    /// Returns the cross product of `self` and `rhs`.
     pub fn cross(self, rhs: Self) -> Self {
         Self::new(
             self.y * rhs.z - self.z * rhs.y,
@@ -61,27 +45,23 @@ impl Vec3 {
         )
     }
 
-    /// Returns the Euclidean length of the vector.
     pub fn length(self) -> f32 {
         self.length_squared().sqrt()
     }
 
-    /// Returns the squared length of the vector.
     pub fn length_squared(self) -> f32 {
         self.dot(self)
     }
 
-    /// Returns the Euclidean distance between `self` and `rhs`.
     pub fn distance(self, rhs: Self) -> f32 {
         (self - rhs).length()
     }
 
-    /// Returns the squared distance between `self` and `rhs`.
     pub fn distance_squared(self, rhs: Self) -> f32 {
         (self - rhs).length_squared()
     }
 
-    /// Returns the normalized vector, or `None` if its length is below `1e-12`.
+    /// `None` if length is below `1e-12`.
     pub fn normalize(self) -> Option<Self> {
         let len = self.length();
         if len < 1e-12 {
@@ -91,47 +71,40 @@ impl Vec3 {
         }
     }
 
-    /// Returns the normalized vector, or the zero vector if it cannot be normalized.
     pub fn normalize_or_zero(self) -> Self {
         self.normalize().unwrap_or(Self::ZERO)
     }
 
-    /// Returns the unclamped linear interpolation between `self` and `rhs` by `t`.
+    /// Unclamped.
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
         self + (rhs - self) * t
     }
 
-    /// Returns the componentwise minimum of `self` and `rhs`.
     pub fn min(self, rhs: Self) -> Self {
         Self::new(self.x.min(rhs.x), self.y.min(rhs.y), self.z.min(rhs.z))
     }
 
-    /// Returns the componentwise maximum of `self` and `rhs`.
     pub fn max(self, rhs: Self) -> Self {
         Self::new(self.x.max(rhs.x), self.y.max(rhs.y), self.z.max(rhs.z))
     }
 
-    /// Returns `self` clamped componentwise between `min` and `max`.
     pub fn clamp(self, min: Self, max: Self) -> Self {
         self.max(min).min(max)
     }
 
-    /// Returns the componentwise absolute value.
     pub fn abs(self) -> Self {
         Self::new(self.x.abs(), self.y.abs(), self.z.abs())
     }
 
-    /// Extends `self` to a [`Vec4`] with the given `w` component.
     pub fn extend(self, w: f32) -> Vec4 {
         Vec4::new(self.x, self.y, self.z, w)
     }
 
-    /// Truncates `self` to a [`Vec2`], dropping the `z` component.
     pub fn truncate(self) -> Vec2 {
         Vec2::new(self.x, self.y)
     }
 
-    /// Returns the projection of `self` onto `rhs`, or `None` if `rhs` is near zero.
+    /// `None` if `rhs` is near zero.
     pub fn project_onto(self, rhs: Self) -> Option<Self> {
         let len_sq = rhs.length_squared();
         if len_sq < 1e-12 {
@@ -141,19 +114,15 @@ impl Vec3 {
         }
     }
 
-    /// Reflects `self` across the plane defined by `normal`.
-    ///
     /// `normal` is assumed to be unit length.
     pub fn reflect(self, normal: Self) -> Self {
         self - normal * (2.0 * self.dot(normal))
     }
 
-    /// Returns the components as an array.
     pub fn as_array(self) -> [f32; 3] {
         [self.x, self.y, self.z]
     }
 
-    /// Returns `true` if all components are finite.
     pub fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }

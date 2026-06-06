@@ -1,47 +1,34 @@
 //! Linear-space RGBA color primitive.
 
 /// Linear-space RGBA color. Components are nominally in `[0, 1]` but are not
-/// clamped (HDR values are permitted). Conversion to and from 8-bit sRGB
-/// applies the sRGB electro-optical transfer function.
+/// clamped (HDR values are permitted).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
-    /// Red channel (linear).
     pub r: f32,
-    /// Green channel (linear).
     pub g: f32,
-    /// Blue channel (linear).
     pub b: f32,
-    /// Alpha channel (linear, opacity).
     pub a: f32,
 }
 
 impl Color {
-    /// Opaque white.
     pub const WHITE: Self = Self::new(1.0, 1.0, 1.0, 1.0);
-    /// Opaque black.
     pub const BLACK: Self = Self::new(0.0, 0.0, 0.0, 1.0);
-    /// Fully transparent black.
     pub const TRANSPARENT: Self = Self::new(0.0, 0.0, 0.0, 0.0);
-    /// Opaque red.
     pub const RED: Self = Self::new(1.0, 0.0, 0.0, 1.0);
-    /// Opaque green.
     pub const GREEN: Self = Self::new(0.0, 1.0, 0.0, 1.0);
-    /// Opaque blue.
     pub const BLUE: Self = Self::new(0.0, 0.0, 1.0, 1.0);
 
-    /// Creates a color from linear RGBA components.
     pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
 
-    /// Creates an opaque color from linear RGB components (alpha = 1).
+    /// Alpha = 1.
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
 
-    /// Creates a color from 8-bit sRGB components, decoding RGB through the
-    /// sRGB EOTF into linear space. Alpha is a linear passthrough.
+    /// Decodes RGB through the sRGB EOTF into linear space. Alpha is a linear passthrough.
     pub fn from_srgb8(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self {
             r: srgb_to_linear(r as f32 / 255.0),
@@ -51,9 +38,8 @@ impl Color {
         }
     }
 
-    /// Encodes this linear color to 8-bit sRGB, applying the inverse sRGB EOTF
-    /// to RGB. Components are clamped to `[0, 1]` before rounding. Alpha is a
-    /// linear passthrough.
+    /// Applies the inverse sRGB EOTF to RGB. Components are clamped to `[0, 1]`
+    /// before rounding. Alpha is a linear passthrough.
     pub fn to_srgb8(self) -> [u8; 4] {
         [
             encode_channel(linear_to_srgb(self.r)),
@@ -63,12 +49,11 @@ impl Color {
         ]
     }
 
-    /// Returns this color with its alpha channel replaced.
     pub fn with_alpha(self, a: f32) -> Self {
         Self { a, ..self }
     }
 
-    /// Componentwise linear interpolation between `self` and `rhs`. Unclamped.
+    /// Unclamped.
     pub fn lerp(self, rhs: Self, t: f32) -> Self {
         Self {
             r: self.r + (rhs.r - self.r) * t,
@@ -78,12 +63,10 @@ impl Color {
         }
     }
 
-    /// Returns the components as an array `[r, g, b, a]`.
     pub fn as_array(self) -> [f32; 4] {
         [self.r, self.g, self.b, self.a]
     }
 
-    /// Returns `true` if all components are finite.
     pub fn is_finite(self) -> bool {
         self.r.is_finite() && self.g.is_finite() && self.b.is_finite() && self.a.is_finite()
     }

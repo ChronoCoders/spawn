@@ -9,21 +9,17 @@ use crate::math::Vec2;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Rect {
-    /// Minimum corner (top-left in a y-down convention).
     pub min: Vec2,
-    /// Maximum corner (exclusive bound).
     pub max: Vec2,
 }
 
 impl Rect {
-    /// Creates a rectangle from explicit corners. The caller upholds the
-    /// `min ≤ max` invariant.
+    /// The caller upholds the `min ≤ max` invariant.
     pub const fn new(min: Vec2, max: Vec2) -> Self {
         Self { min, max }
     }
 
-    /// Creates a rectangle spanning two arbitrary points, normalizing so that
-    /// `min ≤ max` componentwise.
+    /// Normalizes so that `min ≤ max` componentwise.
     pub fn from_points(a: Vec2, b: Vec2) -> Self {
         Self {
             min: a.min(b),
@@ -31,7 +27,6 @@ impl Rect {
         }
     }
 
-    /// Creates a rectangle from a center and full size.
     pub fn from_center_size(center: Vec2, size: Vec2) -> Self {
         let half = size * 0.5;
         Self {
@@ -40,41 +35,33 @@ impl Rect {
         }
     }
 
-    /// Returns the width (extent along x).
     pub fn width(self) -> f32 {
         self.max.x - self.min.x
     }
 
-    /// Returns the height (extent along y).
     pub fn height(self) -> f32 {
         self.max.y - self.min.y
     }
 
-    /// Returns the size as a vector `(width, height)`.
     pub fn size(self) -> Vec2 {
         self.max - self.min
     }
 
-    /// Returns the center point.
     pub fn center(self) -> Vec2 {
         (self.min + self.max) * 0.5
     }
 
-    /// Returns the area (`width * height`).
     pub fn area(self) -> f32 {
         self.width() * self.height()
     }
 
-    /// Returns `true` if the point lies inside the rectangle. Containment is
-    /// min-inclusive and max-exclusive: a point on the `min` edge is contained,
-    /// a point on the `max` edge is not.
+    /// Min-inclusive, max-exclusive: a point on the `min` edge is contained, one
+    /// on the `max` edge is not.
     pub fn contains_point(self, p: Vec2) -> bool {
         p.x >= self.min.x && p.x < self.max.x && p.y >= self.min.y && p.y < self.max.y
     }
 
-    /// Returns `true` if the two rectangles overlap with positive area. Edges
-    /// that merely touch (zero overlap) do not count, consistent with the
-    /// half-open convention.
+    /// Overlap requires positive area; touching edges do not count (half-open).
     pub fn intersects(self, rhs: Self) -> bool {
         self.min.x < rhs.max.x
             && self.max.x > rhs.min.x
@@ -82,8 +69,7 @@ impl Rect {
             && self.max.y > rhs.min.y
     }
 
-    /// Returns the overlapping rectangle, or `None` if the rectangles do not
-    /// overlap with positive area.
+    /// `None` if the rectangles do not overlap with positive area.
     pub fn intersection(self, rhs: Self) -> Option<Self> {
         let min = self.min.max(rhs.min);
         let max = self.max.min(rhs.max);
@@ -94,7 +80,6 @@ impl Rect {
         }
     }
 
-    /// Returns the smallest rectangle covering both inputs.
     pub fn union(self, rhs: Self) -> Self {
         Self {
             min: self.min.min(rhs.min),
@@ -102,8 +87,7 @@ impl Rect {
         }
     }
 
-    /// Returns the rectangle grown outward by `amount` on every side. Negative
-    /// values shrink it.
+    /// Negative `amount` shrinks.
     pub fn expand(self, amount: f32) -> Self {
         let d = Vec2::splat(amount);
         Self {
@@ -112,7 +96,6 @@ impl Rect {
         }
     }
 
-    /// Returns the rectangle translated by `offset`.
     pub fn translate(self, offset: Vec2) -> Self {
         Self {
             min: self.min + offset,

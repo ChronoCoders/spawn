@@ -4,29 +4,24 @@ use std::ops::Mul;
 
 use crate::math::{Mat3, Mat4, Quat, Vec2, Vec3};
 
-/// A 2D affine transform composed of translation, rotation, and scale.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform2D {
-    /// The translation in world units.
     pub translation: Vec2,
-    /// The rotation in radians (counter-clockwise).
+    /// Radians, counter-clockwise.
     pub rotation: f32,
-    /// The componentwise scale.
     pub scale: Vec2,
 }
 
 const _: () = assert!(std::mem::size_of::<Transform2D>() == 20);
 
 impl Transform2D {
-    /// The identity transform: zero translation, zero rotation, unit scale.
     pub const IDENTITY: Self = Self {
         translation: Vec2::ZERO,
         rotation: 0.0,
         scale: Vec2::ONE,
     };
 
-    /// Creates a transform with the given translation and identity rotation and scale.
     pub fn from_translation(t: Vec2) -> Self {
         Self {
             translation: t,
@@ -34,7 +29,6 @@ impl Transform2D {
         }
     }
 
-    /// Creates a transform with the given rotation and identity translation and scale.
     pub fn from_rotation(radians: f32) -> Self {
         Self {
             rotation: radians,
@@ -42,7 +36,6 @@ impl Transform2D {
         }
     }
 
-    /// Creates a transform with the given scale and identity translation and rotation.
     pub fn from_scale(s: Vec2) -> Self {
         Self {
             scale: s,
@@ -50,19 +43,19 @@ impl Transform2D {
         }
     }
 
-    /// Returns the affine matrix for this transform (scale, then rotate, then translate).
+    /// Scale, then rotate, then translate.
     pub fn to_mat3(self) -> Mat3 {
         Mat3::from_translation_2d(self.translation)
             * Mat3::from_rotation_z(self.rotation)
             * Mat3::from_scale_2d(self.scale)
     }
 
-    /// Transforms a point: scale, then rotate, then translate.
+    /// Scale, then rotate, then translate.
     pub fn transform_point(self, p: Vec2) -> Vec2 {
         self.transform_vector(p) + self.translation
     }
 
-    /// Transforms a direction vector: scale, then rotate (no translation).
+    /// Scale, then rotate (no translation).
     pub fn transform_vector(self, v: Vec2) -> Vec2 {
         let scaled = Vec2::new(v.x * self.scale.x, v.y * self.scale.y);
         let (sin, cos) = self.rotation.sin_cos();
@@ -72,7 +65,7 @@ impl Transform2D {
         )
     }
 
-    /// Returns the inverse transform, or `None` if any scale component magnitude is below `1e-12`.
+    /// `None` if any scale component magnitude is below `1e-12`.
     ///
     /// Exact when scale is uniform or rotation is zero; with non-uniform scale under rotation
     /// the true inverse is not representable as a TRS transform (same convention as [`Self::mul`]).
@@ -123,29 +116,23 @@ impl Mul for Transform2D {
     }
 }
 
-/// A 3D affine transform composed of translation, rotation, and scale.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform3D {
-    /// The translation in world units.
     pub translation: Vec3,
-    /// The rotation as a unit quaternion.
     pub rotation: Quat,
-    /// The componentwise scale.
     pub scale: Vec3,
 }
 
 const _: () = assert!(std::mem::size_of::<Transform3D>() == 40);
 
 impl Transform3D {
-    /// The identity transform: zero translation, identity rotation, unit scale.
     pub const IDENTITY: Self = Self {
         translation: Vec3::ZERO,
         rotation: Quat::IDENTITY,
         scale: Vec3::ONE,
     };
 
-    /// Creates a transform with the given translation and identity rotation and scale.
     pub fn from_translation(t: Vec3) -> Self {
         Self {
             translation: t,
@@ -153,7 +140,6 @@ impl Transform3D {
         }
     }
 
-    /// Creates a transform with the given rotation and identity translation and scale.
     pub fn from_rotation(rotation: Quat) -> Self {
         Self {
             rotation,
@@ -161,7 +147,6 @@ impl Transform3D {
         }
     }
 
-    /// Creates a transform with the given scale and identity translation and rotation.
     pub fn from_scale(s: Vec3) -> Self {
         Self {
             scale: s,
@@ -169,24 +154,23 @@ impl Transform3D {
         }
     }
 
-    /// Returns the affine matrix for this transform (scale, then rotate, then translate).
+    /// Scale, then rotate, then translate (TRS).
     pub fn to_mat4(self) -> Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
 
-    /// Transforms a point: scale, then rotate, then translate.
+    /// Scale, then rotate, then translate.
     pub fn transform_point(self, p: Vec3) -> Vec3 {
         self.transform_vector(p) + self.translation
     }
 
-    /// Transforms a direction vector: scale, then rotate (no translation).
+    /// Scale, then rotate (no translation).
     pub fn transform_vector(self, v: Vec3) -> Vec3 {
         let scaled = Vec3::new(v.x * self.scale.x, v.y * self.scale.y, v.z * self.scale.z);
         self.rotation.rotate(scaled)
     }
 
-    /// Returns the inverse transform, or `None` if any scale component magnitude is below `1e-12`
-    /// or the rotation is not invertible.
+    /// `None` if any scale component magnitude is below `1e-12` or the rotation is not invertible.
     ///
     /// Exact when scale is uniform or rotation is identity; with non-uniform scale under rotation
     /// the true inverse is not representable as a TRS transform (same convention as [`Self::mul`]).

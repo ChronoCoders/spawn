@@ -3,21 +3,17 @@
 use crate::math::{Quat, Vec2, Vec3};
 use std::ops::{Add, Mul, Sub};
 
-/// A 3x3 matrix stored in column-major order as three column vectors.
-///
-/// Used both for 3D linear transforms (rotation/scale) and as a 2D
-/// homogeneous affine transform (the third column is translation).
+/// Column-major; the three column vectors. Also used as a 2D homogeneous
+/// affine transform (third column is translation).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mat3 {
-    /// The three column vectors of the matrix.
     pub cols: [Vec3; 3],
 }
 
 const _: () = assert!(std::mem::size_of::<Mat3>() == 36);
 
 impl Mat3 {
-    /// The identity matrix.
     pub const IDENTITY: Self = Self {
         cols: [
             Vec3::new(1.0, 0.0, 0.0),
@@ -26,7 +22,6 @@ impl Mat3 {
         ],
     };
 
-    /// The zero matrix (all components zero).
     pub const ZERO: Self = Self {
         cols: [
             Vec3::new(0.0, 0.0, 0.0),
@@ -35,12 +30,10 @@ impl Mat3 {
         ],
     };
 
-    /// Creates a matrix from its three column vectors.
     pub const fn from_cols(c0: Vec3, c1: Vec3, c2: Vec3) -> Self {
         Self { cols: [c0, c1, c2] }
     }
 
-    /// Creates a matrix from its three row vectors.
     pub fn from_rows(r0: Vec3, r1: Vec3, r2: Vec3) -> Self {
         Self {
             cols: [
@@ -51,7 +44,6 @@ impl Mat3 {
         }
     }
 
-    /// Creates a diagonal matrix from the given diagonal entries.
     pub fn from_diagonal(d: Vec3) -> Self {
         Self {
             cols: [
@@ -62,7 +54,6 @@ impl Mat3 {
         }
     }
 
-    /// Creates a rotation matrix about the X axis (radians).
     pub fn from_rotation_x(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
         Self {
@@ -74,7 +65,6 @@ impl Mat3 {
         }
     }
 
-    /// Creates a rotation matrix about the Y axis (radians).
     pub fn from_rotation_y(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
         Self {
@@ -86,7 +76,6 @@ impl Mat3 {
         }
     }
 
-    /// Creates a rotation matrix about the Z axis (radians).
     pub fn from_rotation_z(radians: f32) -> Self {
         let (s, c) = radians.sin_cos();
         Self {
@@ -98,7 +87,7 @@ impl Mat3 {
         }
     }
 
-    /// Creates a 2D homogeneous affine matrix that scales by `scale`.
+    /// 2D homogeneous affine scale.
     pub fn from_scale_2d(scale: Vec2) -> Self {
         Self {
             cols: [
@@ -109,7 +98,7 @@ impl Mat3 {
         }
     }
 
-    /// Creates a 2D homogeneous affine matrix that translates by `t`.
+    /// 2D homogeneous affine translation.
     pub fn from_translation_2d(t: Vec2) -> Self {
         Self {
             cols: [
@@ -120,7 +109,7 @@ impl Mat3 {
         }
     }
 
-    /// Creates a rotation matrix from a quaternion (assumed unit length).
+    /// `q` is assumed unit length.
     pub fn from_quat(q: Quat) -> Self {
         let (x, y, z, w) = (q.x, q.y, q.z, q.w);
         let (xx, yy, zz) = (x * x, y * y, z * z);
@@ -135,12 +124,12 @@ impl Mat3 {
         }
     }
 
-    /// Returns column `i`, or `None` if out of range.
+    /// `None` if `i` is out of range.
     pub fn col(self, i: usize) -> Option<Vec3> {
         self.cols.get(i).copied()
     }
 
-    /// Returns row `i`, or `None` if out of range.
+    /// `None` if `i` is out of range.
     pub fn row(self, i: usize) -> Option<Vec3> {
         match i {
             0 => Some(Vec3::new(self.cols[0].x, self.cols[1].x, self.cols[2].x)),
@@ -150,7 +139,6 @@ impl Mat3 {
         }
     }
 
-    /// Returns the transpose of this matrix.
     pub fn transpose(self) -> Self {
         Self {
             cols: [
@@ -161,15 +149,13 @@ impl Mat3 {
         }
     }
 
-    /// Returns the determinant of this matrix.
     pub fn determinant(self) -> f32 {
         let [a, b, c] = self.cols;
         a.x * (b.y * c.z - c.y * b.z) - b.x * (a.y * c.z - c.y * a.z)
             + c.x * (a.y * b.z - b.y * a.z)
     }
 
-    /// Returns the inverse of this matrix, or `None` if it is singular
-    /// (`|det| < 1e-12`).
+    /// `None` if singular (`|det| < 1e-12`).
     pub fn inverse(self) -> Option<Self> {
         let det = self.determinant();
         if det.abs() < 1e-12 {
@@ -196,21 +182,18 @@ impl Mat3 {
         })
     }
 
-    /// Transforms a 2D point, treating the matrix as a homogeneous affine
-    /// transform (applies translation).
+    /// Treats the matrix as a 2D homogeneous affine transform (applies translation).
     pub fn transform_point_2d(self, p: Vec2) -> Vec2 {
         let r = self * Vec3::new(p.x, p.y, 1.0);
         Vec2::new(r.x, r.y)
     }
 
-    /// Transforms a 2D direction vector, treating the matrix as a homogeneous
-    /// affine transform (ignores translation).
+    /// Ignores translation.
     pub fn transform_vector_2d(self, v: Vec2) -> Vec2 {
         let r = self * Vec3::new(v.x, v.y, 0.0);
         Vec2::new(r.x, r.y)
     }
 
-    /// Returns `true` if every component of the matrix is finite.
     pub fn is_finite(self) -> bool {
         self.cols[0].is_finite() && self.cols[1].is_finite() && self.cols[2].is_finite()
     }

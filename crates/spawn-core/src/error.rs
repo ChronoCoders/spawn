@@ -3,37 +3,20 @@
 use std::error::Error;
 use std::fmt;
 
-/// The shared error type for the engine.
+/// The shared engine error type.
+///
+/// `#[non_exhaustive]`: downstream crates gain variants in later phases, so
+/// matches must include a wildcard arm. `context` is `&'static str` so error
+/// construction never allocates.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SpawnError {
-    /// An argument failed validation.
-    InvalidArgument {
-        /// Human-readable context describing the failure.
-        context: &'static str,
-    },
-    /// A requested item could not be found.
-    NotFound {
-        /// Human-readable context describing the failure.
-        context: &'static str,
-    },
-    /// An operation was attempted in an invalid state.
-    InvalidState {
-        /// Human-readable context describing the failure.
-        context: &'static str,
-    },
-    /// An underlying I/O operation failed.
+    InvalidArgument { context: &'static str },
+    NotFound { context: &'static str },
+    InvalidState { context: &'static str },
     Io(std::io::Error),
-    /// Parsing of input data failed.
-    Parse {
-        /// Human-readable context describing the failure.
-        context: &'static str,
-    },
-    /// The requested operation is not supported.
-    Unsupported {
-        /// Human-readable context describing the failure.
-        context: &'static str,
-    },
+    Parse { context: &'static str },
+    Unsupported { context: &'static str },
 }
 
 impl fmt::Display for SpawnError {
@@ -64,7 +47,6 @@ impl From<std::io::Error> for SpawnError {
     }
 }
 
-/// A `Result` specialized to [`SpawnError`].
 pub type SpawnResult<T> = Result<T, SpawnError>;
 
 #[cfg(test)]
