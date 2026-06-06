@@ -6,3 +6,15 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-platform = { path = "../spawn-platform", version = "0.1.0" }
+spawn-asset = { path = "../spawn-asset", version = "0.1.0" }
+wgpu = "22"
+bytemuck = { version = "1", features = ["derive"] }
+raw-window-handle = "0.6"
+pollster = "0.3"
+
+[dev-dependencies]
+winit = { version = "0.30", default-features = false, features = ["x11", "rwh_06"] }
