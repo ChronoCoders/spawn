@@ -4,5 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-ecs = { path = "../spawn-ecs", version = "0.1.0" }
+mlua = { version = "0.9", features = ["lua54", "vendored"] }
+
 [lints]
 workspace = true
