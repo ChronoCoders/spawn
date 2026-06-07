@@ -43,4 +43,8 @@ cargo deny check
 
 ## License
 
-[Business Source License 1.1](LICENSE). Non-production use is free; the code converts to Apache License 2.0 on 2029-05-14. For commercial licensing: altug@bytus.io.
+Spawn is licensed under the [Business Source License 1.1](LICENSE).
+
+- Free for non-production use (development, testing, evaluation)
+- Converts to the Apache License 2.0 on **2029-05-14**
+- Commercial licensing: [altug@bytus.io](mailto:altug@bytus.io)
