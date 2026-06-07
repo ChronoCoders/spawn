@@ -64,6 +64,8 @@ pub struct ActionMap<A: ActionId> {
     gamepad_id: Option<GamepadId>,
 }
 
+// Not in the §4 method table, but `new()` is a public no-arg constructor, so
+// clippy::new_without_default mandates this impl. Flagged for spec amendment.
 impl<A: ActionId> Default for ActionMap<A> {
     fn default() -> Self {
         Self::new()
@@ -113,12 +115,10 @@ impl<A: ActionId> ActionMap<A> {
             .unwrap_or(ActionState::EMPTY)
     }
 
-    /// Analog value of an action.
     pub fn value(&self, action: A) -> f32 {
         self.state(action).value
     }
 
-    /// 2D axis of an action.
     pub fn axis2(&self, action: A) -> Vec2 {
         self.state(action).axis2
     }

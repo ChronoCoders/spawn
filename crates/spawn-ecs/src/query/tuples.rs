@@ -4,6 +4,8 @@
 macro_rules! impl_query_tuple {
     ($iter:ident, $iter_mut:ident, $n:expr, $($name:ident => $idx:tt),+) => {
         /// Shared zipped row iterator over a tuple query's archetype columns.
+        // Tuple-macro idiom: the type params `$name` double as struct field names
+        // (upper-camel-case), so the snake-case lint must be suppressed here.
         #[allow(non_snake_case)]
         pub struct $iter<'a, $($name: QueryElement),+> {
             $($name: $name::Iter<'a>,)+
@@ -26,6 +28,8 @@ macro_rules! impl_query_tuple {
         impl<'a, $($name: QueryElement),+> ExactSizeIterator for $iter<'a, $($name),+> {}
 
         /// Exclusive zipped row iterator over a tuple query's archetype columns.
+        // Tuple-macro idiom: the type params `$name` double as struct field names
+        // (upper-camel-case), so the snake-case lint must be suppressed here.
         #[allow(non_snake_case)]
         pub struct $iter_mut<'a, $($name: QueryElement),+> {
             $($name: $name::IterMut<'a>,)+
@@ -49,6 +53,8 @@ macro_rules! impl_query_tuple {
 
         impl<$($name: QueryElement),+> sealed::Sealed for ($($name,)+) {}
 
+        // Tuple-macro idiom: the type params `$name` double as value binding names
+        // (upper-camel-case), so the snake-case lint must be suppressed here.
         #[allow(non_snake_case)]
         impl<$($name: QueryElement),+> QueryData for ($($name,)+) {
             type Item<'a> = ($($name::Item<'a>,)+);

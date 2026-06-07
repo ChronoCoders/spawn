@@ -85,10 +85,11 @@ impl ShaderStore {
                     source: wgpu::ShaderSource::Wgsl(source.into()),
                 });
                 if let Some(err) = pollster::block_on(device.pop_error_scope()) {
+                    let info = pollster::block_on(module.get_compilation_info());
                     return Err(RenderError::ShaderCompile {
                         handle,
                         message: err.to_string(),
-                        location: None,
+                        location: first_error_location(&info),
                     });
                 }
                 Ok(e.insert(module))
@@ -96,20 +97,31 @@ impl ShaderStore {
         }
     }
 
-    pub fn contains(&self, handle: &ShaderHandle) -> bool {
-        self.modules.contains_key(handle)
-    }
-
-    pub fn get(&self, handle: &ShaderHandle) -> Option<&wgpu::ShaderModule> {
+    pub(crate) fn get(&self, handle: &ShaderHandle) -> Option<&wgpu::ShaderModule> {
         self.modules.get(handle)
     }
+}
+
+/// Extracts the source position of the first error-level message wgpu attaches
+/// to a failed compilation, when one is present. wgpu does not always populate a
+/// location (some backends report message-only diagnostics), so this returns
+/// `None` in that case and the error carries the message alone.
+fn first_error_location(info: &wgpu::CompilationInfo) -> Option<crate::error::SourceLocation> {
+    info.messages
+        .iter()
+        .filter(|m| m.message_type == wgpu::CompilationMessageType::Error)
+        .find_map(|m| m.location)
+        .map(|loc| crate::error::SourceLocation {
+            line: loc.line_number,
+            column: loc.line_position,
+        })
 }
 
 /// Per-draw model transform uploaded into a renderer-owned dynamic-offset
 /// uniform buffer. `#[repr(C)]` + `Pod`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ModelUniform {
+pub(crate) struct ModelUniform {
     pub model: [[f32; 4]; 4],
 }
 
@@ -308,6 +320,8 @@ impl PipelineCache {
         self.pipelines.len()
     }
 
+    // Kept to satisfy clippy::len_without_is_empty: a public `len` requires a
+    // companion `is_empty`. Trivial, allocation-free, no per-frame use.
     pub fn is_empty(&self) -> bool {
         self.pipelines.is_empty()
     }
@@ -418,7 +432,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let shader = ShaderHandle::from_id(AssetId::from_raw(99));
         let mut store = ShaderStore::new();
         assert!(store.load(&device, shader, TEST_WGSL).is_ok());
-        assert!(store.contains(&shader));
         // Second load reuses the module (no recompile, still Ok).
         assert!(store.load(&device, shader, TEST_WGSL).is_ok());
 
@@ -454,7 +467,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         };
         let shader = ShaderHandle::from_id(AssetId::from_raw(100));
         let mut store = ShaderStore::new();
-        let err = store.load(&device, shader, "this is not valid wgsl @@@");
-        assert!(matches!(err, Err(RenderError::ShaderCompile { .. })));
+        // A WGSL with a known error on a known line: an undefined identifier in a
+        // function body. wgpu's front-end reports this with a source location.
+        let bad = "@vertex\nfn vs_main() -> @builtin(position) vec4<f32> {\n    return nope;\n}\n";
+        let err = store.load(&device, shader, bad);
+        let Err(RenderError::ShaderCompile {
+            message, location, ..
+        }) = err
+        else {
+            panic!("expected ShaderCompile error");
+        };
+        assert!(!message.is_empty(), "compile error must carry a message");
+        // §13: the location must be captured when wgpu provides one. The Mesa /
+        // naga front-end reports a location for this class of error; if a backend
+        // ever omits it, the contract permits None, so only assert correctness of
+        // a provided location rather than its mere presence.
+        if let Some(loc) = location {
+            assert!(loc.line >= 1, "reported line is 1-based");
+        }
     }
 }

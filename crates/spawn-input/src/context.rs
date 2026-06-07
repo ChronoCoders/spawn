@@ -20,6 +20,8 @@ pub struct InputContextStack<A: ActionId> {
     layers: Vec<(ContextId, ActionMap<A>)>,
 }
 
+// Not in the §5 method table, but `new()` is a public no-arg constructor, so
+// clippy::new_without_default mandates this impl. Flagged for spec amendment.
 impl<A: ActionId> Default for InputContextStack<A> {
     fn default() -> Self {
         Self::new()
@@ -80,7 +82,6 @@ impl<A: ActionId> InputContextStack<A> {
         }
     }
 
-    /// Consumption-resolved analog value.
     pub fn value(&self, action: A) -> f32 {
         self.state(action).value
     }

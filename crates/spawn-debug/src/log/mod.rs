@@ -106,7 +106,9 @@ const fn compile_max_level() -> LogLevel {
     level
 }
 
-/// True when the compile-time floor is `off` (every macro stripped).
+/// True when the compile-time floor is `off` (every macro stripped). Macro
+/// plumbing: read by the expansion of the level macros, not a stable contract.
+#[doc(hidden)]
 pub const COMPILE_OFF: bool = compile_off();
 
 const fn compile_off() -> bool {
@@ -147,6 +149,8 @@ thread_local! {
 }
 
 /// The calling thread's `ThreadTag` (assigned on first call from that thread).
+/// Macro plumbing: invoked by the level macros when building a `LogRecord`.
+#[doc(hidden)]
 pub fn thread_tag() -> ThreadTag {
     THREAD_TAG.with(|t| *t)
 }
@@ -273,6 +277,8 @@ impl Logger {
 
     /// Dispatch a constructed record to all sinks. Called by the log macros only
     /// after [`enabled`](Logger::enabled) returned true. Failures are counted.
+    /// Macro plumbing: not a stable hand-call API.
+    #[doc(hidden)]
     pub fn dispatch(record: &LogRecord<'_>) {
         if let Some(s) = STATE.get() {
             for sink in &s.sinks {

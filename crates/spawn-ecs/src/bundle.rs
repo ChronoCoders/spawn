@@ -55,6 +55,8 @@ macro_rules! impl_bundle_tuple {
         impl<$($name: Component),+> Bundle for ($($name,)+) {}
 
         impl<$($name: Component),+> BundleWrite for ($($name,)+) {
+            // Tuple-macro idiom: the type params `$name` double as value binding names
+            // (upper-camel-case), so the snake-case lint must be suppressed here.
             #[allow(non_snake_case)]
             fn write_into(
                 self,
@@ -69,6 +71,8 @@ macro_rules! impl_bundle_tuple {
                 ]
             }
 
+            // Tuple-macro idiom: the type params `$name` double as value binding names
+            // (upper-camel-case), so the snake-case lint must be suppressed here.
             #[allow(non_snake_case)]
             fn write_into_registered(
                 self,

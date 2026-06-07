@@ -81,12 +81,11 @@ impl Error for ScriptError {}
 
 impl From<ScriptError> for SpawnError {
     fn from(err: ScriptError) -> Self {
+        // Spec §8.1: ScriptError maps onto SpawnError::InvalidState/Parse as appropriate.
+        // Parse failures (load/conversion) surface as Parse; every other runtime failure is
+        // an invalid-state condition for the host.
         match err {
             ScriptError::Load { .. } | ScriptError::Conversion { .. } => SpawnError::Parse {
-                context: "spawn-script",
-            },
-            ScriptError::InvalidArgument { context } => SpawnError::InvalidArgument { context },
-            ScriptError::UnknownScript => SpawnError::NotFound {
                 context: "spawn-script",
             },
             _ => SpawnError::InvalidState {

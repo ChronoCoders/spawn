@@ -262,6 +262,8 @@ impl ScriptEngine {
         self.scripts.contains_key(&id.index())
     }
 
+    /// Returns the current status of `id`, or `None` if the id is unknown
+    /// (never loaded, or already unloaded).
     pub fn status(&self, id: ScriptId) -> Option<ScriptStatus> {
         self.scripts.get(&id.index()).map(|s| s.status)
     }

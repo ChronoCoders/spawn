@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// A monotonically-mutated `u64` counter. All operations use `Relaxed` ordering.
-#[derive(Default)]
 pub struct Counter {
     value: AtomicU64,
 }
@@ -42,7 +41,6 @@ impl Counter {
 }
 
 /// A `u64`-valued gauge supporting saturating signed adjustment.
-#[derive(Default)]
 pub struct Gauge {
     value: AtomicU64,
 }
@@ -100,7 +98,6 @@ pub struct MetricSnapshot {
 }
 
 /// A registry of named counters and gauges. Get-or-create by `&'static str`.
-#[derive(Default)]
 pub struct MetricsRegistry {
     inner: Mutex<Registry>,
 }
@@ -112,8 +109,12 @@ struct Registry {
 }
 
 impl MetricsRegistry {
+    // Spec §3.3 sanctions only `new()`; a public `Default` impl is out of spec.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: Mutex::new(Registry::default()),
+        }
     }
 
     /// Get-or-create a counter; the same name always returns the same instance.

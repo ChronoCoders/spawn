@@ -31,8 +31,7 @@ impl AckedSequences {
         }
     }
 
-    /// Discard all entries without releasing storage.
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.len = 0;
     }
 
@@ -43,19 +42,9 @@ impl AckedSequences {
         }
     }
 
-    /// The acknowledged sequences recorded since the last `clear`.
+    /// The acknowledged sequences recorded by the most recent `process_acks`.
     pub fn as_slice(&self) -> &[u16] {
         &self.buf[..self.len]
-    }
-
-    /// Number of recorded sequences.
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Whether no sequences are recorded.
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 }
 
@@ -241,7 +230,7 @@ mod tests {
 
         // re-process same: nothing new
         e.process_acks(19, bits, &mut out);
-        assert!(out.is_empty());
+        assert!(out.as_slice().is_empty());
     }
 
     #[test]
@@ -250,7 +239,7 @@ mod tests {
         e.next_sequence(); // only 0 sent
         let mut out = AckedSequences::new();
         e.process_acks(100, 0, &mut out);
-        assert!(out.is_empty());
+        assert!(out.as_slice().is_empty());
         e.process_acks(0, 0, &mut out);
         assert_eq!(out.as_slice(), &[0]);
     }

@@ -34,6 +34,7 @@ fn amplitude_to_value(amplitude: f32) -> Value<Decibels> {
 /// cheap (kira shares the sample buffer via `Arc` internally).
 pub(crate) struct BackendSound {
     data: StaticSoundData,
+    channels: u16,
 }
 
 impl BackendSound {
@@ -46,11 +47,13 @@ impl BackendSound {
     }
 
     pub(crate) fn channels(&self) -> u16 {
-        // kira decodes to interleaved frames; sample type carries channel count.
+        // The true source channel count is sniffed from the file header at decode
+        // time (kira itself always exposes decoded stereo frames). An empty clip
+        // has no channels.
         if self.data.num_frames() == 0 {
             0
         } else {
-            2
+            self.channels
         }
     }
 
@@ -65,11 +68,13 @@ impl BackendSound {
 
 /// Decodes raw `wav`/`ogg` bytes into a [`BackendSound`]. Returns
 /// [`AudioError::Decode`] on malformed input. The supported-extension gate is
-/// applied by the loader before this is called.
-pub(crate) fn decode_source(bytes: &[u8]) -> AudioResult<BackendSound> {
+/// applied by the loader before this is called. `channels` is the source channel
+/// count sniffed from the file header by the loader (kira only exposes decoded
+/// stereo frames, so the true count cannot be recovered post-decode).
+pub(crate) fn decode_source(bytes: &[u8], channels: u16) -> AudioResult<BackendSound> {
     let cursor = Cursor::new(bytes.to_vec());
     match StaticSoundData::from_cursor(cursor) {
-        Ok(data) => Ok(BackendSound { data }),
+        Ok(data) => Ok(BackendSound { data, channels }),
         Err(_) => Err(AudioError::Decode {
             context: "failed to decode wav/ogg audio data",
         }),

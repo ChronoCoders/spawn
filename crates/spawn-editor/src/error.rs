@@ -16,10 +16,7 @@ use std::fmt;
 #[non_exhaustive]
 pub enum EditorError {
     /// An entity referenced by a command or operation is stale or never existed.
-    EntityNotFound {
-        /// The offending identity.
-        entity: Entity,
-    },
+    EntityNotFound { entity: Entity },
     /// A command required a component the entity does not have.
     ComponentMissing {
         /// The entity that lacked the component.

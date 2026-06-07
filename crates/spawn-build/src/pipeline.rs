@@ -72,11 +72,63 @@ enum CompileResult {
     },
 }
 
+/// Test-only observability: the exact number of worker threads spawned by the
+/// most recent [`BuildPipeline::compile_parallel`] call, and the peak number
+/// observed running concurrently. These let the parallel-compile test assert
+/// the worker pool is actually exercised without making production code
+/// observable.
+#[cfg(test)]
+static SPAWNED_WORKERS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static PEAK_CONCURRENCY: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+#[derive(Default)]
+struct ConcurrencyGauge {
+    current: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+#[cfg(test)]
+struct ActiveGuard<'a>(&'a ConcurrencyGauge);
+
+#[cfg(test)]
+impl ConcurrencyGauge {
+    fn enter(&self) -> ActiveGuard<'_> {
+        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        ActiveGuard(self)
+    }
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+impl Drop for ActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.current.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl BuildPipeline {
+    /// Creates a pipeline with [`BuildConfig::default`].
+    ///
+    /// # Errors
+    /// Returns [`BuildError::SourceRootMissing`] if `manifest.source_root` does
+    /// not exist or is not a directory. No other filesystem state is touched
+    /// (`output_dir` need not yet exist).
     pub fn new(manifest: BuildManifest) -> BuildResult<Self> {
         Self::with_config(manifest, BuildConfig::default())
     }
 
+    /// Creates a pipeline with an explicit [`BuildConfig`]. `config.workers` is
+    /// clamped to at least 1.
+    ///
+    /// # Errors
+    /// Returns [`BuildError::SourceRootMissing`] if `manifest.source_root` does
+    /// not exist or is not a directory. No other filesystem state is touched
+    /// (`output_dir` need not yet exist).
     pub fn with_config(manifest: BuildManifest, config: BuildConfig) -> BuildResult<Self> {
         if !manifest.source_root.is_dir() {
             return Err(BuildError::SourceRootMissing {
@@ -184,9 +236,10 @@ impl BuildPipeline {
         })
     }
 
-    /// Compiles `to_compile` across exactly `config.workers` threads. Each
-    /// worker pulls indices from a shared atomic counter (bounded, no unbounded
-    /// spawning). Per-asset failures are collected, not propagated, so one
+    /// Compiles `to_compile` across exactly `config.workers` threads (§8.1
+    /// step 5). Each worker pulls indices from a shared atomic counter (bounded,
+    /// no unbounded spawning); workers that find no remaining work exit
+    /// immediately. Per-asset failures are collected, not propagated, so one
     /// failure does not poison the scope.
     fn compile_parallel(&self, to_compile: &[&AssetEntry]) -> Vec<CompileResult> {
         if to_compile.is_empty() {
@@ -194,39 +247,52 @@ impl BuildPipeline {
         }
         let next = AtomicUsize::new(0);
         let results: Mutex<Vec<CompileResult>> = Mutex::new(Vec::new());
-        let workers = self.config.workers.min(to_compile.len()).max(1);
+        let workers = self.config.workers.max(1);
+        #[cfg(test)]
+        let gauge = ConcurrencyGauge::default();
 
         std::thread::scope(|scope| {
             for _ in 0..workers {
                 let next = &next;
                 let results = &results;
                 let manifest = &self.manifest;
-                scope.spawn(move || loop {
-                    let idx = next.fetch_add(1, Ordering::Relaxed);
-                    if idx >= to_compile.len() {
-                        break;
-                    }
-                    let entry = to_compile[idx];
-                    let outcome = match compile_asset(entry, manifest) {
-                        Ok(output) => CompileResult::Compiled {
-                            id: entry.id,
-                            record: CacheRecord {
-                                source_hash: entry.content_hash,
-                                output_hash: output.output_hash,
+                #[cfg(test)]
+                let gauge = &gauge;
+                scope.spawn(move || {
+                    #[cfg(test)]
+                    let _active = gauge.enter();
+                    loop {
+                        let idx = next.fetch_add(1, Ordering::Relaxed);
+                        if idx >= to_compile.len() {
+                            break;
+                        }
+                        let entry = to_compile[idx];
+                        let outcome = match compile_asset(entry, manifest) {
+                            Ok(output) => CompileResult::Compiled {
+                                id: entry.id,
+                                record: CacheRecord {
+                                    source_hash: entry.content_hash,
+                                    output_hash: output.output_hash,
+                                },
+                                output_len: output.output_len,
                             },
-                            output_len: output.output_len,
-                        },
-                        Err(error) => CompileResult::Failed {
-                            id: entry.id,
-                            error,
-                        },
-                    };
-                    if let Ok(mut guard) = results.lock() {
-                        guard.push(outcome);
+                            Err(error) => CompileResult::Failed {
+                                id: entry.id,
+                                error,
+                            },
+                        };
+                        if let Ok(mut guard) = results.lock() {
+                            guard.push(outcome);
+                        }
                     }
                 });
             }
         });
+
+        #[cfg(test)]
+        SPAWNED_WORKERS.store(workers, Ordering::Relaxed);
+        #[cfg(test)]
+        PEAK_CONCURRENCY.store(gauge.peak(), Ordering::Relaxed);
 
         results.into_inner().unwrap_or_default()
     }
@@ -267,6 +333,72 @@ fn remove_dir_if_present(path: &std::path::Path) -> BuildResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::glob::Pattern;
+    use std::path::PathBuf;
+
+    struct TempTree {
+        root: PathBuf,
+    }
+    impl TempTree {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "spawn-build-pipeline-{tag}-{}-{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+        fn file(&self, rel: &str, bytes: &[u8]) {
+            let p = self.root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        }
+    }
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn manifest(root: &std::path::Path, out: &std::path::Path) -> BuildManifest {
+        BuildManifest {
+            source_root: root.to_path_buf(),
+            output_dir: out.to_path_buf(),
+            include: vec![Pattern::compile("**").unwrap()],
+            exclude: vec![],
+        }
+    }
+
+    #[test]
+    fn compile_spawns_exactly_workers_and_runs_concurrently() {
+        let tree = TempTree::new("workers");
+        for i in 0..300u32 {
+            tree.file(&format!("d{}/f{i}.bin", i % 8), &i.to_le_bytes());
+        }
+        let out = tree.root.join("out");
+        let cfg = BuildConfig {
+            workers: 8,
+            cache_name: "build.cache".to_string(),
+        };
+        let pipeline = BuildPipeline::with_config(manifest(&tree.root, &out), cfg).unwrap();
+        let report = pipeline.build().unwrap();
+        assert_eq!(report.compiled, 300);
+
+        assert_eq!(
+            SPAWNED_WORKERS.load(Ordering::SeqCst),
+            8,
+            "must spawn exactly `workers` threads"
+        );
+        assert!(
+            PEAK_CONCURRENCY.load(Ordering::SeqCst) > 1,
+            "worker pool must run threads concurrently (peak {} <= 1)",
+            PEAK_CONCURRENCY.load(Ordering::SeqCst)
+        );
+    }
 
     #[test]
     fn config_default_clamps_workers() {

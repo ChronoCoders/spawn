@@ -42,14 +42,34 @@ pub(crate) fn surface_action(err: &wgpu::SurfaceError) -> SurfaceAction {
     }
 }
 
+/// Maps the renderer's device-lost flag to a frame result.
+///
+/// Device-lost detection contract (§5/§11): wgpu 22 `Queue::submit` returns a
+/// `SubmissionIndex`, never a `Result`, so submission cannot report device loss.
+/// The `Renderer` instead owns an atomic flag set by wgpu's device-lost callback
+/// (registered in [`crate::renderer::Renderer::new`]). `begin_frame` and
+/// `end_frame` consult this seam: `true` ⇒ `Err(RenderError::DeviceLost)`,
+/// `false` ⇒ `Ok(())`. Factored out as a pure function so the flag→error mapping
+/// is unit-testable without forcing a real (un-forceable headless) device loss.
+pub(crate) fn device_lost_error(device_lost: bool) -> RenderResult<()> {
+    if device_lost {
+        Err(RenderError::DeviceLost)
+    } else {
+        Ok(())
+    }
+}
+
 impl<'w> Renderer<'w> {
     /// Acquires the surface texture and creates the frame encoder.
     ///
-    /// On `Lost`/`Outdated` the surface is reconfigured once and acquire is
-    /// retried once; a second failure returns [`RenderError::Surface`].
-    /// `Timeout` maps to [`RenderError::SurfaceTimeout`] (skippable),
-    /// `OutOfMemory` to [`RenderError::OutOfMemory`] (fatal). Never panics.
+    /// Returns [`RenderError::DeviceLost`] immediately if the device-lost flag is
+    /// set (see [`device_lost_error`]). On `Lost`/`Outdated` the surface is
+    /// reconfigured once and acquire is retried once; a second failure returns
+    /// [`RenderError::Surface`]. `Timeout` maps to [`RenderError::SurfaceTimeout`]
+    /// (skippable), `OutOfMemory` to [`RenderError::OutOfMemory`] (fatal). Never
+    /// panics.
     pub fn begin_frame(&mut self) -> RenderResult<FrameContext<'_, 'w>> {
+        device_lost_error(self.is_device_lost())?;
         let surface_texture = match self.surface.get_current_texture() {
             Ok(tex) => tex,
             Err(err) => match surface_action(&err) {
@@ -100,8 +120,13 @@ impl FrameContext<'_, '_> {
     }
 
     /// Submits exactly one command buffer and presents the surface texture.
-    /// `Err(DeviceLost)` if submission fails. The surface texture is consumed
-    /// here and never retained.
+    ///
+    /// Returns [`RenderError::DeviceLost`] if the device-lost flag was set before
+    /// submission. Because wgpu 22 `Queue::submit` returns a `SubmissionIndex`
+    /// (not a `Result`), loss detected during submission is observed on the next
+    /// frame via the device-lost callback rather than from `submit` itself (see
+    /// [`device_lost_error`]). The surface texture is consumed here and never
+    /// retained.
     pub fn end_frame(mut self) -> RenderResult<()> {
         let encoder = self.encoder.take().ok_or(RenderError::InvalidArgument {
             context: "frame encoder already consumed",
@@ -112,6 +137,7 @@ impl FrameContext<'_, '_> {
             .ok_or(RenderError::InvalidArgument {
                 context: "surface texture already presented",
             })?;
+        device_lost_error(self.renderer.is_device_lost())?;
         self.renderer
             .queue
             .submit(std::iter::once(encoder.finish()));
@@ -149,6 +175,17 @@ mod tests {
         assert!(matches!(
             surface_action(&wgpu::SurfaceError::OutOfMemory),
             SurfaceAction::Fail(RenderError::OutOfMemory)
+        ));
+    }
+
+    #[test]
+    fn device_lost_flag_maps_to_device_lost_error() {
+        // The callback sets the flag; the seam consulted by begin_frame/end_frame
+        // turns a set flag into RenderError::DeviceLost and a clear flag into Ok.
+        assert!(device_lost_error(false).is_ok());
+        assert!(matches!(
+            device_lost_error(true),
+            Err(RenderError::DeviceLost)
         ));
     }
 }

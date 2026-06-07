@@ -184,6 +184,9 @@ impl DivAssign<f32> for Vec4 {
 
 impl Index<usize> for Vec4 {
     type Output = f32;
+    /// # Panics
+    ///
+    /// Panics if `index` is out of range (must be `0`, `1`, `2`, or `3`).
     fn index(&self, index: usize) -> &f32 {
         match index {
             0 => &self.x,
@@ -196,6 +199,9 @@ impl Index<usize> for Vec4 {
 }
 
 impl IndexMut<usize> for Vec4 {
+    /// # Panics
+    ///
+    /// Panics if `index` is out of range (must be `0`, `1`, `2`, or `3`).
     fn index_mut(&mut self, index: usize) -> &mut f32 {
         match index {
             0 => &mut self.x,

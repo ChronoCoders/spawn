@@ -10,7 +10,16 @@ use crate::error::{DebugError, DebugResult};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+
+/// Record a dropped write into both the per-sink counter and the process-global
+/// `Logger` counter. The per-sink counter is always accurate even when the sink
+/// is used without an initialized `Logger`.
+fn record_dropped(local: &AtomicU64) {
+    local.fetch_add(1, Ordering::Relaxed);
+    report_dropped();
+}
 
 fn format_line(record: &LogRecord<'_>) -> String {
     format!(
@@ -27,13 +36,9 @@ pub struct StderrSink {
     out: Mutex<std::io::Stderr>,
 }
 
-impl Default for StderrSink {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl StderrSink {
+    // Spec §1.6 sanctions only `new()`; a public `Default` impl is out of spec.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             out: Mutex::new(std::io::stderr()),
@@ -76,6 +81,7 @@ pub struct FileSink {
     path: PathBuf,
     max_bytes: u64,
     max_files: u32,
+    dropped: AtomicU64,
 }
 
 impl FileSink {
@@ -99,6 +105,7 @@ impl FileSink {
             path: config.path,
             max_bytes: config.max_bytes,
             max_files: config.max_files,
+            dropped: AtomicU64::new(0),
         })
     }
 
@@ -158,7 +165,7 @@ impl LogSink for FileSink {
     fn write(&self, record: &LogRecord<'_>) {
         let line = format_line(record);
         if self.write_inner(line.as_bytes()).is_err() {
-            report_dropped();
+            record_dropped(&self.dropped);
         }
     }
 
@@ -388,6 +395,47 @@ mod tests {
         p3.push(".3");
         assert!(!PathBuf::from(p3).exists());
         assert!(base.exists());
+    }
+
+    #[test]
+    fn file_sink_write_error_increments_dropped_never_panics() {
+        // Force a rotation I/O error: with `max_files == 2`, rotation first tries
+        // to drop the oldest slot via `remove_file(base.1)`. Pre-create `base.1`
+        // as a non-empty directory so `remove_file` fails (it is not a file) on
+        // every platform and regardless of privilege. The sink must count the
+        // drop and never panic; rotation never deletes a directory by accident.
+        let root = std::env::temp_dir().join(format!("spawn_dbg_werr_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create dir");
+        let base = root.join("rot.log");
+
+        let mut blocker = base.clone().into_os_string();
+        blocker.push(".1");
+        let blocker = PathBuf::from(blocker);
+        std::fs::create_dir(&blocker).expect("create blocker dir");
+        std::fs::write(blocker.join("keep"), b"x").expect("populate blocker");
+
+        let sink = FileSink::open(FileSinkConfig {
+            path: base.clone(),
+            max_bytes: 20,
+            max_files: 2,
+        })
+        .expect("open");
+        // Seed the file (size 0 -> no rotation attempt).
+        sink.write(&rec(format_args!("first-line-seed")));
+        // These exceed max_bytes and attempt rotation, which fails at the
+        // `remove_file(base.1)` step. Each is dropped and counted; none panic.
+        for i in 0..3u32 {
+            sink.write(&rec(format_args!("overflowing-line-{i}")));
+        }
+        sink.flush();
+
+        let dropped = sink.dropped.load(Ordering::Relaxed);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            dropped >= 1,
+            "expected at least one dropped record from failed rotation"
+        );
     }
 
     #[test]

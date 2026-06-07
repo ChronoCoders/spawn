@@ -25,9 +25,7 @@ struct PlaySnapshot {
 
 /// The editor's top-level mutable state.
 pub struct EditorState {
-    /// Undo/redo history.
     pub commands: CommandStack,
-    /// Current selection.
     pub selection: Selection,
     mode: EditorMode,
     snapshot: Option<PlaySnapshot>,

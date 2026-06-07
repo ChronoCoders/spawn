@@ -179,6 +179,8 @@ macro_rules! impl_into_system {
         {
             type Sys = FunctionSystem;
 
+            // Tuple-macro idiom: the type params `$q` are reused as value binding names,
+            // which are upper-camel-case, so the lint must be suppressed for generated code.
             #[allow(non_snake_case)]
             fn into_system(mut self) -> FunctionSystem {
                 let mut pending = Vec::new();

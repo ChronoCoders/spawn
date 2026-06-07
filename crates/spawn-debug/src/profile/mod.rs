@@ -6,6 +6,11 @@
 //! The active frame's scope state lives in a `thread_local!` so `profile_scope!`
 //! finds it without raw pointers or `unsafe`. When no profiler is active on the
 //! thread, `profile_scope!` is a no-op.
+//!
+//! Allocation: node storage is pooled and reused across frames. `begin_frame`
+//! draws cleared `ScopeNode` buffers from a free pool; `end_frame` returns
+//! evicted history reports' buffers to that pool. After warm-up the steady-state
+//! frame path performs no heap allocation.
 
 pub mod report;
 pub mod scope;
@@ -45,56 +50,74 @@ impl Default for ProfilerConfig {
     }
 }
 
-/// A node in the in-progress frame's scope stack, before it is folded into a
-/// `ScopeNode` tree. Children are merged by name on close.
-struct LiveNode {
-    name: &'static str,
+/// A `ScopeNode` paired with the open-scope start instant, used while a node is
+/// on the live stack. The node carries its (recyclable) `children` buffer.
+struct OpenScope {
+    node: ScopeNode,
     start: Instant,
-    duration: core::time::Duration,
-    call_count: u32,
-    children: Vec<LiveNode>,
-}
-
-impl LiveNode {
-    fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            start: Instant::now(),
-            duration: core::time::Duration::ZERO,
-            call_count: 1,
-            children: Vec::new(),
-        }
-    }
-
-    fn into_scope(self) -> ScopeNode {
-        let mut node = ScopeNode::new(self.name);
-        node.duration = self.duration;
-        node.call_count = self.call_count;
-        for child in self.children {
-            merge_into(&mut node.children, child.into_scope());
-        }
-        node
-    }
-}
-
-fn merge_into(children: &mut Vec<ScopeNode>, incoming: ScopeNode) {
-    if let Some(existing) = children.iter_mut().find(|c| c.name == incoming.name) {
-        existing.duration += incoming.duration;
-        existing.call_count += incoming.call_count;
-        for ic in incoming.children {
-            merge_into(&mut existing.children, ic);
-        }
-    } else {
-        children.push(incoming);
-    }
 }
 
 /// The active frame's scope state, owned by the thread-local while a frame is
-/// open. `stack` holds the path of currently-open nodes; `roots` the completed
-/// top-level nodes.
+/// open. `stack` holds currently-open scopes; `roots` the completed top-level
+/// nodes. Both Vecs and all node `children` buffers are reused across frames.
 struct FrameState {
-    roots: Vec<LiveNode>,
-    stack: Vec<LiveNode>,
+    roots: Vec<ScopeNode>,
+    stack: Vec<OpenScope>,
+    pool: NodePool,
+}
+
+/// A free list of `ScopeNode`s whose `children` buffers are retained for reuse,
+/// plus spare `roots`/`stack` frame buffers. Recycling clears contents but keeps
+/// capacity, so a warmed pool serves steady-state frames without allocating.
+#[derive(Default)]
+struct NodePool {
+    free: Vec<ScopeNode>,
+    roots_spare: Vec<Vec<ScopeNode>>,
+    stack_spare: Vec<Vec<OpenScope>>,
+}
+
+impl NodePool {
+    fn take_roots(&mut self) -> Vec<ScopeNode> {
+        self.roots_spare.pop().unwrap_or_default()
+    }
+
+    fn take_stack(&mut self) -> Vec<OpenScope> {
+        self.stack_spare.pop().unwrap_or_default()
+    }
+
+    fn recycle_roots(&mut self, mut buf: Vec<ScopeNode>) {
+        while let Some(node) = buf.pop() {
+            self.recycle(node);
+        }
+        self.roots_spare.push(buf);
+    }
+
+    fn recycle_stack(&mut self, mut buf: Vec<OpenScope>) {
+        while let Some(open) = buf.pop() {
+            self.recycle(open.node);
+        }
+        self.stack_spare.push(buf);
+    }
+
+    fn take(&mut self, name: &'static str) -> ScopeNode {
+        match self.free.pop() {
+            Some(mut node) => {
+                node.name = name;
+                node.duration = core::time::Duration::ZERO;
+                node.call_count = 0;
+                node.children.clear();
+                node
+            }
+            None => ScopeNode::new(name),
+        }
+    }
+
+    fn recycle(&mut self, mut node: ScopeNode) {
+        while let Some(child) = node.children.pop() {
+            self.recycle(child);
+        }
+        self.free.push(node);
+    }
 }
 
 thread_local! {
@@ -107,7 +130,11 @@ pub(crate) fn push_scope(name: &'static str) -> bool {
         let mut slot = a.borrow_mut();
         match slot.as_mut() {
             Some(frame) => {
-                frame.stack.push(LiveNode::new(name));
+                let node = frame.pool.take(name);
+                frame.stack.push(OpenScope {
+                    node,
+                    start: Instant::now(),
+                });
                 true
             }
             None => false,
@@ -121,24 +148,39 @@ pub(crate) fn pop_scope() {
     ACTIVE.with(|a| {
         let mut slot = a.borrow_mut();
         if let Some(frame) = slot.as_mut() {
-            if let Some(mut node) = frame.stack.pop() {
-                node.duration = node.start.elapsed();
-                match frame.stack.last_mut() {
-                    Some(parent) => merge_live(&mut parent.children, node),
-                    None => merge_live(&mut frame.roots, node),
-                }
-            }
+            close_top(frame);
         }
     });
 }
 
-fn merge_live(children: &mut Vec<LiveNode>, incoming: LiveNode) {
-    if let Some(existing) = children.iter_mut().find(|c| c.name == incoming.name) {
-        existing.duration += incoming.duration;
-        existing.call_count += incoming.call_count;
-        for ic in incoming.children {
-            merge_live(&mut existing.children, ic);
+fn close_top(frame: &mut FrameState) {
+    if let Some(open) = frame.stack.pop() {
+        let mut node = open.node;
+        node.duration = open.start.elapsed();
+        node.call_count = node.call_count.saturating_add(1);
+        match frame.stack.last_mut() {
+            Some(parent) => merge_node(&mut parent.node.children, node, &mut frame.pool),
+            None => merge_node(&mut frame.roots, node, &mut frame.pool),
         }
+    }
+}
+
+/// Merge `incoming` into `children` by name: same-name siblings fold (durations
+/// summed, call counts added, children merged recursively). The absorbed node's
+/// buffers are recycled into `pool`.
+fn merge_node(children: &mut Vec<ScopeNode>, mut incoming: ScopeNode, pool: &mut NodePool) {
+    if let Some(pos) = children.iter().position(|c| c.name == incoming.name) {
+        children[pos].duration += incoming.duration;
+        children[pos].call_count = children[pos].call_count.saturating_add(incoming.call_count);
+        // Drain incoming's children forward to preserve their observable order,
+        // merging each into the surviving node; then recycle the emptied node.
+        let mut grandchildren = core::mem::take(&mut incoming.children);
+        for ic in grandchildren.drain(..) {
+            let target = &mut children[pos].children;
+            merge_node(target, ic, pool);
+        }
+        incoming.children = grandchildren;
+        pool.recycle(incoming);
     } else {
         children.push(incoming);
     }
@@ -150,6 +192,7 @@ pub struct Profiler {
     frame_index: u64,
     frame_start: Instant,
     history: Vec<FrameReport>,
+    pool: NodePool,
     stats: HashMap<&'static str, RollingStats>,
     _not_sync: core::marker::PhantomData<*const ()>,
 }
@@ -159,6 +202,7 @@ impl Profiler {
         let history_len = config.history_len.max(1);
         Self {
             history: Vec::with_capacity(history_len),
+            pool: NodePool::default(),
             stats: HashMap::new(),
             config,
             frame_index: 0,
@@ -168,20 +212,20 @@ impl Profiler {
     }
 
     /// Start a new frame: installs the active scope state on this thread and
-    /// records the frame start instant.
+    /// records the frame start instant. Reuses pooled node buffers.
     pub fn begin_frame(&mut self) {
         self.frame_start = Instant::now();
+        let mut pool = std::mem::take(&mut self.pool);
+        let roots = pool.take_roots();
+        let stack = pool.take_stack();
         ACTIVE.with(|a| {
-            *a.borrow_mut() = Some(FrameState {
-                roots: Vec::new(),
-                stack: Vec::new(),
-            });
+            *a.borrow_mut() = Some(FrameState { roots, stack, pool });
         });
     }
 
     /// Close the frame: any open scopes are closed LIFO and the report is flagged
     /// `malformed`. Folds the tree into rolling stats and pushes a `FrameReport`
-    /// into the history ring.
+    /// into the history ring, recycling any evicted report's node buffers.
     pub fn end_frame(&mut self) {
         let total = self.frame_start.elapsed();
         let frame = ACTIVE.with(|a| a.borrow_mut().take());
@@ -191,17 +235,24 @@ impl Profiler {
         };
         let malformed = !frame.stack.is_empty();
         // Close any unbalanced open scopes in LIFO order.
-        while let Some(mut node) = frame.stack.pop() {
-            node.duration = node.start.elapsed();
-            match frame.stack.last_mut() {
-                Some(parent) => merge_live(&mut parent.children, node),
-                None => merge_live(&mut frame.roots, node),
-            }
+        while !frame.stack.is_empty() {
+            close_top(&mut frame);
         }
-        let mut root = ScopeNode::new("<root>");
-        for live in frame.roots {
-            merge_into(&mut root.children, live.into_scope());
+
+        let FrameState {
+            mut roots,
+            stack,
+            mut pool,
+        } = frame;
+        let mut root = pool.take("<root>");
+        for child in roots.drain(..) {
+            merge_node(&mut root.children, child, &mut pool);
         }
+
+        // Reclaim the frame's buffers into the pool, then the pool itself.
+        pool.recycle_roots(roots);
+        pool.recycle_stack(stack);
+        self.pool = pool;
 
         // Fold per-scope inclusive durations into rolling stats.
         let window = self.config.stats_window;
@@ -219,10 +270,19 @@ impl Profiler {
 
     fn push_report(&mut self, report: FrameReport) {
         let cap = self.config.history_len.max(1);
-        if self.history.len() == cap {
-            self.history.remove(0);
+        if self.history.len() < cap {
+            self.history.push(report);
+        } else {
+            // Ring is full. Wrap around: rotate the oldest report to the tail,
+            // recycle its node buffers into the pool, then overwrite that slot
+            // with the new report. Observable order stays oldest->newest and the
+            // backing buffer's capacity is never reallocated.
+            self.history.rotate_left(1);
+            if let Some(slot) = self.history.last_mut() {
+                let evicted = std::mem::replace(slot, report);
+                self.pool.recycle(evicted.root);
+            }
         }
-        self.history.push(report);
     }
 
     /// Monotonically increasing frame counter.
@@ -245,9 +305,12 @@ impl Profiler {
         self.stats.get(name)
     }
 
-    /// Reset history and stats; the frame counter is preserved.
+    /// Reset history and stats; the frame counter is preserved. Node buffers are
+    /// recycled into the pool rather than freed.
     pub fn clear(&mut self) {
-        self.history.clear();
+        while let Some(report) = self.history.pop() {
+            self.pool.recycle(report.root);
+        }
         self.stats.clear();
     }
 }
@@ -308,6 +371,19 @@ mod tests {
     }
 
     #[test]
+    fn top_level_order_preserved() {
+        let mut p = Profiler::new(ProfilerConfig::default());
+        p.begin_frame();
+        for name in ["a", "b", "c"] {
+            let _g = ScopeGuard::enter(name);
+        }
+        p.end_frame();
+        let report = p.last_report().expect("report");
+        let names: Vec<&str> = report.root.children.iter().map(|c| c.name).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+    }
+
+    #[test]
     fn unbalanced_scope_sets_malformed() {
         let mut p = Profiler::new(ProfilerConfig::default());
         p.begin_frame();
@@ -347,6 +423,22 @@ mod tests {
         assert_eq!(p.history().len(), 2);
         let st = p.scope_stats("s").expect("stats");
         assert_eq!(st.count(), 3);
+    }
+
+    #[test]
+    fn history_order_after_wraparound() {
+        let mut p = Profiler::new(ProfilerConfig {
+            history_len: 3,
+            stats_window: 8,
+        });
+        for _ in 0..5 {
+            p.begin_frame();
+            p.end_frame();
+        }
+        let h = p.history();
+        let indices: Vec<u64> = h.iter().map(|r| r.frame_index).collect();
+        assert_eq!(indices, [2, 3, 4]);
+        assert_eq!(p.last_report().expect("report").frame_index, 4);
     }
 
     #[test]

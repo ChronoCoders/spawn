@@ -139,7 +139,6 @@ impl Default for Selection {
 pub struct SelectionChanged {
     /// Selected entities in insertion order.
     pub selected: Vec<Entity>,
-    /// The primary entity, if any.
     pub primary: Option<Entity>,
 }
 

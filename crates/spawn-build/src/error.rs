@@ -130,10 +130,10 @@ impl From<BuildError> for SpawnError {
             BuildError::InvalidPattern { .. } => SpawnError::Parse {
                 context: "spawn-build pattern",
             },
-            BuildError::ManifestMissingKey { .. } => SpawnError::InvalidArgument {
+            BuildError::ManifestMissingKey { .. } => SpawnError::Parse {
                 context: "spawn-build manifest key",
             },
-            BuildError::PathEscapesRoot { .. } => SpawnError::InvalidArgument {
+            BuildError::PathEscapesRoot { .. } => SpawnError::Parse {
                 context: "spawn-build path escapes root",
             },
             BuildError::DuplicateAssetId { .. } => SpawnError::InvalidState {
@@ -145,7 +145,7 @@ impl From<BuildError> for SpawnError {
             BuildError::PackFormat { .. } => SpawnError::Parse {
                 context: "spawn-build pack format",
             },
-            BuildError::SourceRootMissing { .. } => SpawnError::NotFound {
+            BuildError::SourceRootMissing { .. } => SpawnError::InvalidState {
                 context: "spawn-build source root",
             },
             BuildError::UnknownExtension { .. } => SpawnError::Unsupported {

@@ -20,6 +20,11 @@ static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 
 struct Counting;
 
+// SAFETY: every method forwards verbatim to the std `System` allocator, which is a
+// correct `GlobalAlloc` implementation; the only added work is an atomic counter bump
+// that never touches the pointer or layout. The `unsafe` is required solely because the
+// `GlobalAlloc` trait methods are themselves `unsafe`, so all memory-safety obligations
+// are discharged by `System`.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if ARMED.try_with(|a| a.get()).unwrap_or(false) {

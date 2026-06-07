@@ -93,6 +93,8 @@ impl Transform2D {
     /// Scale composes componentwise (engine convention, matching Bevy/Unity): non-uniform
     /// scale under rotation does not compose exactly through a TRS representation, so the
     /// resulting scale is the componentwise product of parent and child scale.
+    // Spec §2.5 mandates both this inherent `mul` and the `Mul` operator impl; the lint
+    // fires because of the operator overlap, but both are required by the public API.
     #[allow(clippy::should_implement_trait)]
     pub fn mul(self, child: Self) -> Self {
         Self {
@@ -198,6 +200,8 @@ impl Transform3D {
     /// Scale composes componentwise (engine convention, matching Bevy/Unity): non-uniform
     /// scale under rotation does not compose exactly through a TRS representation, so the
     /// resulting scale is the componentwise product of parent and child scale.
+    // Spec §2.6 mandates both this inherent `mul` and the `Mul` operator impl; the lint
+    // fires because of the operator overlap, but both are required by the public API.
     #[allow(clippy::should_implement_trait)]
     pub fn mul(self, child: Self) -> Self {
         Self {

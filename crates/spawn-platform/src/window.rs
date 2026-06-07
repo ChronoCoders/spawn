@@ -171,6 +171,11 @@ impl Window {
         self.mode.get()
     }
 
+    /// Sets the window title.
+    ///
+    /// Returns `Ok(())` on every supported platform; the `PlatformResult`
+    /// return preserves a fallible contract for backends that may reject a
+    /// title change (currently none do).
     pub fn set_title(&self, title: &str) -> PlatformResult<()> {
         self.inner.set_title(title);
         Ok(())

@@ -23,7 +23,7 @@ mod pipeline;
 mod renderer;
 mod texture;
 
-pub use asset_handle::{ShaderHandle, TextureHandle};
+pub use asset_handle::ShaderHandle;
 pub use camera::{Camera, CameraUniform};
 pub use error::{RenderError, RenderResult, SourceLocation};
 pub use format::{
@@ -36,8 +36,7 @@ pub use material::{Material, MaterialUniform};
 pub use mesh::{Mesh, Vertex};
 pub use passes::forward_opaque::{DrawItem, RenderScene};
 pub use pipeline::{
-    BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, RenderStateKey, ShaderStore,
-    VertexLayoutId,
+    BindGroupLayouts, PipelineCache, PipelineKey, RenderStateKey, ShaderStore, VertexLayoutId,
 };
 pub use renderer::{HasWindowHandleSet, Renderer, RendererConfig};
 pub use texture::{SamplerConfig, Texture};

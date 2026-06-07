@@ -14,7 +14,6 @@ pub struct TextureId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FontId(pub u64);
 
-/// Image content attached to a node.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiImage {
     pub texture: TextureId,

@@ -23,16 +23,26 @@ use crate::params::{
 use crate::source::AudioSource;
 use crate::spatial::Listener;
 
+/// Specification for one named bus created at [`AudioEngine::new`].
 #[derive(Debug, Clone)]
 pub struct BusSpec {
+    /// The bus identifier. Must not be [`BusId::MASTER`] (reserved → [`AudioError::ReservedBus`])
+    /// and must be unique across the config (duplicates → [`AudioError::DuplicateBus`]).
     pub id: BusId,
+    /// Initial linear amplitude, clamped to `0.0..=1.0` at init.
     pub initial_volume: f32,
 }
 
+/// Configuration consumed once by [`AudioEngine::new`].
 #[derive(Debug, Clone)]
 pub struct AudioConfig {
+    /// Advisory device sample rate; the device may ignore it. `None` = device default.
     pub sample_rate_hint: Option<u32>,
+    /// Named buses to create at init. The master bus ([`BusId::MASTER`]) is implicit
+    /// and must not appear here. Empty is valid (master only).
     pub buses: Vec<BusSpec>,
+    /// Pre-sizes the voice table; `play` beyond this returns [`AudioError::VoiceLimit`]
+    /// rather than allocating.
     pub max_voices: usize,
 }
 
@@ -182,6 +192,9 @@ impl AudioEngine {
         })
     }
 
+    /// Whether a real audio device is driving output ([`BackendKind::Device`]) or
+    /// the engine fell back to a no-op [`BackendKind::Null`] device (running with
+    /// audio disabled). Lets the caller log/surface that audio is unavailable.
     pub fn backend_kind(&self) -> BackendKind {
         self.kind
     }
@@ -209,6 +222,8 @@ impl AudioEngine {
         }
     }
 
+    /// Sets a bus's linear amplitude. `amplitude` is clamped to `0.0..=1.0`
+    /// (non-finite → `0`); an unknown bus returns [`AudioError::UnknownBus`].
     pub fn set_bus_volume(&mut self, bus: BusId, amplitude: f32) -> AudioResult<()> {
         let amplitude = clamp_amplitude(amplitude);
         if bus == BusId::MASTER {
@@ -239,10 +254,14 @@ impl AudioEngine {
         self.listener
     }
 
+    /// Pauses the whole device (e.g. when the app is backgrounded). Idempotent:
+    /// suspending an already-suspended engine is a successful no-op.
     pub fn suspend(&mut self) -> AudioResult<()> {
         self.backend.suspend()
     }
 
+    /// Resumes device output after [`suspend`](Self::suspend). Idempotent:
+    /// resuming a running engine is a successful no-op.
     pub fn resume(&mut self) -> AudioResult<()> {
         self.backend.resume()
     }

@@ -69,22 +69,33 @@ pub fn discover(manifest: &BuildManifest) -> BuildResult<Vec<AssetEntry>> {
 
         let entry = AssetEntry {
             id,
-            source_path: canonical.clone(),
+            source_path: canonical,
             byte_len,
             content_hash,
         };
-        if let Some(existing) = by_id.insert(id, entry) {
-            return Err(BuildError::DuplicateAssetId {
-                id,
-                path_a: existing.source_path,
-                path_b: canonical,
-            });
-        }
+        insert_unique(&mut by_id, entry)?;
     }
 
     let mut entries: Vec<AssetEntry> = by_id.into_values().collect();
     entries.sort_by_key(|e| e.id.raw());
     Ok(entries)
+}
+
+/// Inserts `entry` into `by_id`, rejecting an [`AssetId`] already claimed by a
+/// different source path as [`BuildError::DuplicateAssetId`]. Two distinct
+/// canonical paths can only collide here through a genuine FNV-1a collision; the
+/// guard ensures such a collision is a hard error, never a silent overwrite.
+fn insert_unique(by_id: &mut HashMap<AssetId, AssetEntry>, entry: AssetEntry) -> BuildResult<()> {
+    let id = entry.id;
+    let path_b = entry.source_path.clone();
+    if let Some(existing) = by_id.insert(id, entry) {
+        return Err(BuildError::DuplicateAssetId {
+            id,
+            path_a: existing.source_path,
+            path_b,
+        });
+    }
+    Ok(())
 }
 
 /// Attaches the offending path to an [`BuildError::Io`] raised by a helper that
@@ -192,6 +203,40 @@ mod tests {
     impl Drop for TempTree {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn insert_unique_rejects_id_collision() {
+        // Forge two entries with the *same* AssetId but distinct source paths,
+        // simulating a real FNV-1a collision (impractical to produce naturally).
+        let id = AssetId::from_canonical_path("first.png");
+        let mut by_id: HashMap<AssetId, AssetEntry> = HashMap::new();
+        let a = AssetEntry {
+            id,
+            source_path: "first.png".to_string(),
+            byte_len: 1,
+            content_hash: 0,
+        };
+        let b = AssetEntry {
+            id,
+            source_path: "colliding/other.png".to_string(),
+            byte_len: 2,
+            content_hash: 0,
+        };
+        insert_unique(&mut by_id, a).unwrap();
+        let err = insert_unique(&mut by_id, b).unwrap_err();
+        match err {
+            BuildError::DuplicateAssetId {
+                id: got,
+                path_a,
+                path_b,
+            } => {
+                assert_eq!(got, id);
+                assert_eq!(path_a, "first.png");
+                assert_eq!(path_b, "colliding/other.png");
+            }
+            other => panic!("expected DuplicateAssetId, got {other:?}"),
         }
     }
 

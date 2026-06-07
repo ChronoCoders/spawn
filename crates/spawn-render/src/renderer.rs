@@ -1,5 +1,6 @@
 //! The `Renderer`: owns all GPU state for one window/surface.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -49,6 +50,7 @@ impl Default for RendererConfig {
 pub struct Renderer<'w> {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) device_lost: Arc<AtomicBool>,
     pub(crate) cache: PipelineCache,
     pub(crate) shaders: ShaderStore,
     pub(crate) layouts: BindGroupLayouts,
@@ -174,6 +176,22 @@ impl<'w> Renderer<'w> {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
+        // Device-lost detection contract: wgpu 22 `Queue::submit` returns a
+        // `SubmissionIndex` (not a `Result`), so submission itself never reports
+        // device loss. Instead wgpu invokes this callback once when the device is
+        // lost (driver reset, removal, or explicit destroy). The callback only
+        // sets a shared atomic flag; `begin_frame`/`end_frame` read the flag (via
+        // `device_lost_error`) and surface `RenderError::DeviceLost`. The flag is
+        // sticky: once lost the device never recovers, so every subsequent frame
+        // fails fast. The callback runs on a wgpu-internal thread, hence `Send`.
+        let device_lost = Arc::new(AtomicBool::new(false));
+        {
+            let flag = Arc::clone(&device_lost);
+            device.set_device_lost_callback(move |_reason, _message| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+
         let caps = surface.get_capabilities(&adapter);
         let surface_format = pick_surface_format(&caps, config.surface_format)?;
         let present_mode = pick_present_mode(&caps, config.present_mode);
@@ -237,6 +255,7 @@ impl<'w> Renderer<'w> {
         Ok(Self {
             device,
             queue,
+            device_lost,
             cache: PipelineCache::new(),
             shaders: ShaderStore::new(),
             layouts,
@@ -309,6 +328,13 @@ impl<'w> Renderer<'w> {
 
     pub(crate) fn fallback_texture(&self) -> &Texture {
         &self.fallback_texture
+    }
+
+    /// Reads the device-lost flag set by the wgpu device-lost callback. `true`
+    /// once the GPU device has been lost (sticky). The frame lifecycle maps this
+    /// to [`RenderError::DeviceLost`] via [`crate::frame::device_lost_error`].
+    pub(crate) fn is_device_lost(&self) -> bool {
+        self.device_lost.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Reconfigures the surface and recreates the depth target at the current

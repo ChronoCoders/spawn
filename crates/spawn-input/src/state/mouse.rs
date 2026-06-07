@@ -7,6 +7,11 @@ use spawn_platform::{MouseButton, ScrollDelta};
 const NAMED_BUTTONS: usize = 5;
 /// Fixed capacity for distinct `MouseButton::Other(code)` slots.
 const OTHER_CAPACITY: usize = 8;
+/// Nominal pixels per scrolled line, used to convert pixel-precise scroll
+/// deltas into the line units that `wheel()` reports (§1.3). Trackpads and
+/// high-resolution wheels deliver `ScrollDelta::Pixels`; dividing by this
+/// constant keeps `wheel()` in a single, consistent line-based unit.
+const PIXELS_PER_LINE: f32 = 16.0;
 
 fn named_index(button: MouseButton) -> Option<usize> {
     match button {
@@ -97,7 +102,7 @@ impl Mouse {
     pub(crate) fn add_wheel(&mut self, delta: ScrollDelta) {
         let (x, y) = match delta {
             ScrollDelta::Lines { x, y } => (x, y),
-            ScrollDelta::Pixels { x, y } => (x, y),
+            ScrollDelta::Pixels { x, y } => (x / PIXELS_PER_LINE, y / PIXELS_PER_LINE),
         };
         self.wheel += Vec2::new(x, y);
     }
@@ -206,5 +211,18 @@ mod tests {
         assert!(m.wheel().approx_eq_default(Vec2::new(1.0, 3.0)));
         m.begin_frame();
         assert!(m.wheel().approx_eq_default(Vec2::ZERO));
+    }
+
+    #[test]
+    fn wheel_pixels_convert_to_lines() {
+        let mut m = Mouse::new();
+        m.add_wheel(ScrollDelta::Pixels {
+            x: PIXELS_PER_LINE,
+            y: PIXELS_PER_LINE * 2.0,
+        });
+        assert!(m.wheel().approx_eq_default(Vec2::new(1.0, 2.0)));
+        // Pixel and line deltas accumulate in the same (line) unit.
+        m.add_wheel(ScrollDelta::Lines { x: 0.0, y: 1.0 });
+        assert!(m.wheel().approx_eq_default(Vec2::new(1.0, 3.0)));
     }
 }

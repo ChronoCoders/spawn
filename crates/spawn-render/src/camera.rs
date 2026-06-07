@@ -39,6 +39,9 @@ impl Camera {
 
     /// Builds a perspective camera. `Err(InvalidArgument)` if `look_at_rh` or
     /// `perspective_rh` is degenerate (returns `None`).
+    // Arity is fixed by the spec §4 signature (eye/target/up + fov/aspect/near/
+    // far): each parameter is a distinct camera input, so grouping them into a
+    // struct would only obscure the spec-mandated public signature.
     #[allow(clippy::too_many_arguments)]
     pub fn perspective(
         eye: Vec3,
@@ -61,6 +64,9 @@ impl Camera {
 
     /// Builds an orthographic camera. `Err(InvalidArgument)` if `look_at_rh` or
     /// `orthographic_rh` is degenerate.
+    // Arity is fixed by the spec §4 signature (eye/target/up + the six ortho
+    // frustum bounds): each parameter is a distinct camera input, so grouping
+    // them into a struct would only obscure the spec-mandated public signature.
     #[allow(clippy::too_many_arguments)]
     pub fn orthographic(
         eye: Vec3,

@@ -189,3 +189,41 @@ fn parallel_matches_single_worker() {
     let idx_s = std::fs::read(out_s.join("index.spawnpack")).unwrap();
     assert_eq!(idx_p, idx_s, "parallel build must match single-worker");
 }
+
+/// §11 "Parallel compile correctness": the build must complete under a hard
+/// deadline (no deadlock). The build runs on a child thread and the parent
+/// fails the test if it has not finished within the deadline.
+#[test]
+fn parallel_build_completes_under_hard_deadline() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let tree = TempDir::new("deadline");
+    for i in 0..300u32 {
+        tree.file(&format!("src/dir{}/f{i}.bin", i % 8), &i.to_le_bytes());
+    }
+    let root = tree.path.join("src");
+    let out = tree.path.join("out");
+    let cfg = BuildConfig {
+        workers: 8,
+        cache_name: "build.cache".to_string(),
+    };
+    let pipeline = BuildPipeline::with_config(manifest(&root, &out), cfg).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let report = pipeline.build();
+        let _ = tx.send(report.map(|r| r.compiled));
+    });
+
+    match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(Ok(compiled)) => {
+            assert_eq!(compiled, 300);
+            handle.join().unwrap();
+        }
+        Ok(Err(err)) => panic!("build failed: {err}"),
+        Err(_) => {
+            panic!("parallel build did not complete within the 60s hard deadline (deadlock?)")
+        }
+    }
+}

@@ -88,22 +88,18 @@ impl InputState {
         }
     }
 
-    /// Keyboard device state.
     pub fn keyboard(&self) -> &Keyboard {
         &self.keyboard
     }
 
-    /// Mouse device state.
     pub fn mouse(&self) -> &Mouse {
         &self.mouse
     }
 
-    /// Touch device state.
     pub fn touch(&self) -> &Touch {
         &self.touch
     }
 
-    /// Gamepad device state.
     pub fn gamepads(&self) -> &Gamepads {
         &self.gamepads
     }

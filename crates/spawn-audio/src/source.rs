@@ -22,13 +22,75 @@ impl AudioSource {
         self.inner.duration_secs()
     }
 
+    /// The clip's source channel count (e.g. `1` for mono, `2` for stereo),
+    /// sniffed from the file header at load. `0` for an empty clip. If the header
+    /// cannot be sniffed, falls back to the decoded-frame count (`2`, since kira
+    /// always decodes to stereo frames).
     pub fn channels(&self) -> u16 {
         self.inner.channels()
     }
 
+    /// The clip's sample rate in Hz.
     pub fn sample_rate(&self) -> u32 {
         self.inner.sample_rate()
     }
+}
+
+/// Sniffs the source channel count from raw `wav`/`ogg` bytes without decoding.
+///
+/// WAV: walks the RIFF chunk list to the `fmt ` chunk and reads the 16-bit LE
+/// channel field at its offset 2. OGG Vorbis: locates the Vorbis identification
+/// header (`\x01vorbis`) inside the first Ogg page and reads its 8-bit channel
+/// field. Returns the decoded-frame fallback `2` when the header cannot be
+/// parsed (kira always decodes to stereo frames, so `2` is the safe default).
+fn sniff_channels(bytes: &[u8]) -> u16 {
+    const FALLBACK: u16 = 2;
+    sniff_wav_channels(bytes)
+        .or_else(|| sniff_ogg_channels(bytes))
+        .unwrap_or(FALLBACK)
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    let slice = bytes.get(offset..offset + 2)?;
+    Some(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let slice = bytes.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn sniff_wav_channels(bytes: &[u8]) -> Option<u16> {
+    if bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    // Walk RIFF chunks starting after "RIFF<size>WAVE".
+    let mut offset = 12usize;
+    while offset + 8 <= bytes.len() {
+        let id = bytes.get(offset..offset + 4)?;
+        let size = read_u32_le(bytes, offset + 4)? as usize;
+        let body = offset + 8;
+        if id == b"fmt " {
+            // Channel count is the u16 LE at fmt-body offset 2.
+            return read_u16_le(bytes, body + 2);
+        }
+        // Chunks are word-aligned: bodies are padded to even length.
+        offset = body + size + (size & 1);
+    }
+    None
+}
+
+fn sniff_ogg_channels(bytes: &[u8]) -> Option<u16> {
+    if bytes.get(0..4)? != b"OggS" {
+        return None;
+    }
+    // The Vorbis identification header begins with "\x01vorbis"; its channel
+    // field is the single byte after the 1-byte packet type, 6-byte signature,
+    // and 4-byte vorbis_version.
+    const IDENT: &[u8] = b"\x01vorbis";
+    let pos = bytes.windows(IDENT.len()).position(|w| w == IDENT)?;
+    let channels_offset = pos + IDENT.len() + 4;
+    Some(u16::from(*bytes.get(channels_offset)?))
 }
 
 impl spawn_asset::Asset for AudioSource {}
@@ -65,7 +127,8 @@ impl AssetLoader for AudioLoader {
                 });
             }
         }
-        let sound = decode_source(bytes).map_err(map_decode_error)?;
+        let channels = sniff_channels(bytes);
+        let sound = decode_source(bytes, channels).map_err(map_decode_error)?;
         Ok(AudioSource { inner: sound })
     }
 }

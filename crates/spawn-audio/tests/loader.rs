@@ -12,9 +12,8 @@ fn ctx<'a>(path: &'a str, ext: &'a str) -> LoadContext<'a> {
     }
 }
 
-fn tiny_wav() -> Vec<u8> {
+fn wav_with_channels(channels: u16) -> Vec<u8> {
     let sample_rate: u32 = 8000;
-    let channels: u16 = 1;
     let bits: u16 = 16;
     let frames: u32 = 16;
     let data_len = frames * u32::from(channels) * u32::from(bits / 8);
@@ -35,11 +34,15 @@ fn tiny_wav() -> Vec<u8> {
     v.extend_from_slice(&bits.to_le_bytes());
     v.extend_from_slice(b"data");
     v.extend_from_slice(&data_len.to_le_bytes());
-    for i in 0..frames {
+    for i in 0..frames * u32::from(channels) {
         let s = (i as i16).wrapping_mul(1000);
         v.extend_from_slice(&s.to_le_bytes());
     }
     v
+}
+
+fn tiny_wav() -> Vec<u8> {
+    wav_with_channels(1)
 }
 
 #[test]
@@ -48,9 +51,18 @@ fn decodes_wav_metadata() {
         .load(&tiny_wav(), &ctx("beep.wav", "wav"))
         .expect("wav decodes");
     assert_eq!(source.sample_rate(), 8000);
-    assert!(source.channels() >= 1);
+    // tiny_wav is mono; channels() must report the real source count.
+    assert_eq!(source.channels(), 1);
     // 16 frames at 8 kHz = 2 ms.
     assert!(source.duration() > 0.0 && source.duration() < 0.1);
+}
+
+#[test]
+fn decodes_stereo_wav_channels() {
+    let source = AudioLoader
+        .load(&wav_with_channels(2), &ctx("stereo.wav", "wav"))
+        .expect("stereo wav decodes");
+    assert_eq!(source.channels(), 2);
 }
 
 #[test]
