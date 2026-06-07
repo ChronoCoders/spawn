@@ -30,3 +30,7 @@ pub use state::{
     Deadzone, GamepadAxis, GamepadButton, GamepadEvent, GamepadId, Gamepads, InputState, Keyboard,
     Mouse, Touch, TouchId, TouchPhase, TouchPoint,
 };
+
+/// Physical input identifiers originate in spawn-platform; re-exported so
+/// downstream crates (spawn-ui) need not depend on spawn-platform directly.
+pub use spawn_platform::{KeyCode, MouseButton};
