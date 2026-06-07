@@ -8,20 +8,20 @@ Rust game engine with archetype ECS, wgpu rendering, Rapier physics, and Lua scr
 
 | Crate | Purpose |
 |---|---|
-| `spawn-core` | Math, primitives, errors. `#[repr(C)]`, f32, right-handed, column-major. Zero deps. |
-| `spawn-ecs` | Archetype ECS: queries, deferred commands, conflict-detecting parallel scheduler. |
-| `spawn-platform` | Window, run loop, OS event translation (winit, fully wrapped). |
-| `spawn-input` | Device state, action mapping, contexts, runtime rebinding (gilrs gamepads). |
-| `spawn-render` | wgpu renderer: pipeline cache, validated render graph, forward pass. |
-| `spawn-asset` | Async loading, typed handles, day-one hot-reload via Arc-swap. |
-| `spawn-audio` | kira mixer: buses, spatial attenuation/panning, null-device fallback. |
-| `spawn-physics` | Rapier 2D/3D behind `dim2`/`dim3` features, fixed-step, ECS sync. |
-| `spawn-script` | Sandboxed Lua 5.4 (mlua): instruction budgets, memory caps, typed bridge. |
-| `spawn-editor` | Headless editor framework: undo/redo command stack, selection, gizmo math. |
-| `spawn-net` | UDP transport: byte-precise protocol, salt handshake, reliable channels. |
-| `spawn-ui` | Retained flexbox-subset UI: incremental layout, hit testing, draw list. |
-| `spawn-debug` | Logging, frame profiler, metrics, overlay data model. Zero deps. |
-| `spawn-build` | Asset compiler: manifest, content hashing, incremental, deterministic pack index. |
+| [`spawn-core`](crates/spawn-core/) | Math, primitives, errors. `#[repr(C)]`, f32, right-handed, column-major. Zero deps. |
+| [`spawn-ecs`](crates/spawn-ecs/) | Archetype ECS: queries, deferred commands, conflict-detecting parallel scheduler. |
+| [`spawn-platform`](crates/spawn-platform/) | Window, run loop, OS event translation (winit, fully wrapped). |
+| [`spawn-input`](crates/spawn-input/) | Device state, action mapping, contexts, runtime rebinding (gilrs gamepads). |
+| [`spawn-render`](crates/spawn-render/) | wgpu renderer: pipeline cache, validated render graph, forward pass. |
+| [`spawn-asset`](crates/spawn-asset/) | Async loading, typed handles, day-one hot-reload via Arc-swap. |
+| [`spawn-audio`](crates/spawn-audio/) | kira mixer: buses, spatial attenuation/panning, null-device fallback. |
+| [`spawn-physics`](crates/spawn-physics/) | Rapier 2D/3D behind `dim2`/`dim3` features, fixed-step, ECS sync. |
+| [`spawn-script`](crates/spawn-script/) | Sandboxed Lua 5.4 (mlua): instruction budgets, memory caps, typed bridge. |
+| [`spawn-editor`](crates/spawn-editor/) | Headless editor framework: undo/redo command stack, selection, gizmo math. |
+| [`spawn-net`](crates/spawn-net/) | UDP transport: byte-precise protocol, salt handshake, reliable channels. |
+| [`spawn-ui`](crates/spawn-ui/) | Retained flexbox-subset UI: incremental layout, hit testing, draw list. |
+| [`spawn-debug`](crates/spawn-debug/) | Logging, frame profiler, metrics, overlay data model. Zero deps. |
+| [`spawn-build`](crates/spawn-build/) | Asset compiler: manifest, content hashing, incremental, deterministic pack index. |
 
 ## Building
 
