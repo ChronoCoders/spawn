@@ -40,7 +40,6 @@ impl fmt::Display for PlatformError {
 
 impl Error for PlatformError {}
 
-/// Result alias for fallible platform operations.
 pub type PlatformResult<T> = Result<T, PlatformError>;
 
 #[cfg(test)]

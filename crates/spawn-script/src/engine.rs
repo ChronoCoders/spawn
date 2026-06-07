@@ -15,7 +15,6 @@ use crate::error::{ScriptError, ScriptResult};
 use crate::sandbox::{self, BudgetCounter, BUDGET_SENTINEL};
 use crate::value::{self, ScriptValue};
 
-/// Status of a loaded script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptStatus {
     Loaded,
@@ -103,7 +102,6 @@ impl ScriptEngine {
         })
     }
 
-    /// The active configuration.
     pub fn config(&self) -> ScriptConfig {
         self.config
     }

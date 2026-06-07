@@ -20,8 +20,8 @@ pub struct InputContextStack<A: ActionId> {
     layers: Vec<(ContextId, ActionMap<A>)>,
 }
 
-// Not in the §5 method table, but `new()` is a public no-arg constructor, so
-// clippy::new_without_default mandates this impl. Flagged for spec amendment.
+// `new()` is a public no-arg constructor, so clippy::new_without_default
+// mandates this impl (sanctioned in spec §5, amendment).
 impl<A: ActionId> Default for InputContextStack<A> {
     fn default() -> Self {
         Self::new()
@@ -29,12 +29,10 @@ impl<A: ActionId> Default for InputContextStack<A> {
 }
 
 impl<A: ActionId> InputContextStack<A> {
-    /// Empty stack.
     pub fn new() -> Self {
         Self { layers: Vec::new() }
     }
 
-    /// Pushes a context onto the top of the stack.
     pub fn push(&mut self, id: ContextId, map: ActionMap<A>) {
         self.layers.push((id, map));
     }

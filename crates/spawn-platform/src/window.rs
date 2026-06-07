@@ -166,7 +166,6 @@ impl Window {
         self.vsync
     }
 
-    /// Current window mode.
     pub fn mode(&self) -> WindowMode {
         self.mode.get()
     }

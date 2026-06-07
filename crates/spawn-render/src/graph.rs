@@ -258,9 +258,9 @@ mod tests {
 
     #[test]
     fn two_surface_passes_are_rejected_phase1() {
-        // Finding B: a two-pass-to-surface graph would let the second pass's
-        // singleton camera/model uniforms clobber the first pass. validate()
-        // rejects it so the hazard cannot reach execution.
+        // A two-pass-to-surface graph would let the second pass's singleton
+        // camera/model uniforms clobber the first pass. validate() rejects it
+        // so the hazard cannot reach execution.
         let mut g = RenderGraph::new();
         g.add_pass(opaque_pass(ColorTarget::SurfaceColor, Vec::new()));
         g.add_pass(opaque_pass(ColorTarget::SurfaceColor, Vec::new()));

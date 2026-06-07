@@ -65,7 +65,6 @@ pub struct UiTree {
 }
 
 impl UiTree {
-    /// Constructs a tree with a single parentless root carrying `root_style`.
     pub fn new(root_style: Style) -> Self {
         let root = NodeId {
             index: 0,

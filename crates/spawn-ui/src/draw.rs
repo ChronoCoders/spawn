@@ -61,7 +61,6 @@ pub struct DrawList {
 }
 
 impl DrawList {
-    /// Clears the commands while retaining capacity.
     pub fn clear(&mut self) {
         self.commands.clear();
     }

@@ -64,8 +64,8 @@ pub struct ActionMap<A: ActionId> {
     gamepad_id: Option<GamepadId>,
 }
 
-// Not in the §4 method table, but `new()` is a public no-arg constructor, so
-// clippy::new_without_default mandates this impl. Flagged for spec amendment.
+// `new()` is a public no-arg constructor, so clippy::new_without_default
+// mandates this impl (sanctioned in spec §4, amendment).
 impl<A: ActionId> Default for ActionMap<A> {
     fn default() -> Self {
         Self::new()

@@ -191,7 +191,7 @@ fn execute_rejects_unvalidated_graph() {
     };
 
     // A structurally valid graph that was never validated must be refused by
-    // execute before any recording (audit finding #5).
+    // execute before any recording.
     let mut never_validated = RenderGraph::new();
     never_validated.add_pass(RenderPassDesc {
         name: "opaque",
