@@ -6,3 +6,7 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-asset = { path = "../spawn-asset", version = "0.1.0" }
