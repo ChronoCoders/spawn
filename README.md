@@ -1,3 +1,12 @@
+<p align="center">
+  <img src="assets/logo.svg" width="72" height="72" />
+</p>
+
+<h1 align="center">Spawn</h1>
+<p align="center">A production-grade game engine written in Rust.</p>
+
+---
+
 # Spawn
 
 Rust game engine with archetype ECS, wgpu rendering, Rapier physics, and Lua scripting.
