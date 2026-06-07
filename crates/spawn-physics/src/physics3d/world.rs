@@ -201,7 +201,11 @@ impl PhysicsWorld {
 
     /// Drains the accumulator: runs `floor(acc / dt)` ticks, capped at
     /// `max_substeps_per_frame`, and returns the number of ticks run.
-    pub fn step_accumulate(&mut self, frame_dt: f32) -> u32 {
+    ///
+    /// APPENDS every internal tick's collision events to `events` in tick
+    /// order, preserving cross-tick `Started`/`Stopped` pairs. The caller owns
+    /// clearing; a reused `Vec` keeps this allocation-free in steady state.
+    pub fn step_accumulate(&mut self, frame_dt: f32, events: &mut Vec<CollisionEvent>) -> u32 {
         if !frame_dt.is_finite() || frame_dt <= 0.0 {
             return 0;
         }
@@ -210,6 +214,7 @@ impl PhysicsWorld {
         let mut ticks = 0;
         while self.accumulator >= dt && ticks < self.config.max_substeps_per_frame {
             self.step();
+            events.extend_from_slice(&self.event_buffer);
             self.accumulator -= dt;
             ticks += 1;
         }

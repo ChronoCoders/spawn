@@ -328,14 +328,64 @@ mod tests {
     fn accumulator_runs_and_caps() {
         let mut w = world();
         let dt = w.config().fixed_timestep;
-        assert_eq!(w.step_accumulate(2.5 * dt), 2);
+        let mut events = Vec::new();
+        assert_eq!(w.step_accumulate(2.5 * dt, &mut events), 2);
         assert!(w.accumulator().approx_eq(0.5 * dt, 1e-6));
 
         let mut capped = world();
         assert_eq!(
-            capped.step_accumulate(100.0 * dt),
+            capped.step_accumulate(100.0 * dt, &mut events),
             capped.config().max_substeps_per_frame
         );
+    }
+
+    #[test]
+    fn accumulator_collects_events_across_ticks() {
+        let mut w = world();
+        let dt = w.config().fixed_timestep;
+        let floor = w.add_rigid_body(RigidBodyDesc::fixed());
+        w.add_collider(
+            floor,
+            ColliderDesc::new(Shape::Cuboid {
+                half_extents: Vec2::new(10.0, 0.5),
+            })
+            .as_sensor(true),
+        )
+        .unwrap();
+        let body = w.add_rigid_body(
+            RigidBodyDesc::dynamic()
+                .with_transform(Transform2D::from_translation(Vec2::new(0.0, 2.0)))
+                .with_velocity(Velocity {
+                    linear: Vec2::new(0.0, -20.0),
+                    angular: 0.0,
+                }),
+        );
+        w.add_collider(body, ColliderDesc::new(Shape::Ball { radius: 0.25 }))
+            .unwrap();
+
+        // Drive the fast-falling ball through the thin sensor in accumulated
+        // batches; the Started/Stopped pair lands on different internal ticks.
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            w.step_accumulate(4.0 * dt, &mut events);
+        }
+        let started = events
+            .iter()
+            .filter(|e| matches!(e, CollisionEvent::Started(_, _)))
+            .count();
+        let stopped = events
+            .iter()
+            .filter(|e| matches!(e, CollisionEvent::Stopped(_, _)))
+            .count();
+        assert_eq!(started, 1, "sensor entry must be observed: {events:?}");
+        assert_eq!(stopped, 1, "sensor exit must be observed: {events:?}");
+        let started_idx = events
+            .iter()
+            .position(|e| matches!(e, CollisionEvent::Started(_, _)));
+        let stopped_idx = events
+            .iter()
+            .position(|e| matches!(e, CollisionEvent::Stopped(_, _)));
+        assert!(started_idx < stopped_idx, "tick order must be preserved");
     }
 
     #[test]
