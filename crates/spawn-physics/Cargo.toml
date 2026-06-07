@@ -4,5 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-ecs = { path = "../spawn-ecs", version = "0.1.0" }
+rapier3d = { version = "0.22", features = ["enhanced-determinism"], optional = true }
+rapier2d = { version = "0.22", features = ["enhanced-determinism"], optional = true }
+
+[features]
+default = ["dim3", "dim2"]
+dim3 = ["dep:rapier3d"]
+dim2 = ["dep:rapier2d"]
+
 [lints]
 workspace = true

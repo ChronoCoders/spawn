@@ -20,6 +20,12 @@ pub type AnyValue = Box<dyn Any + Send + Sync>;
 /// opting in per type (no blanket impl) keeps the set of stored types auditable.
 pub trait Component: Send + Sync + 'static {}
 
+/// Spatial transforms are first-class engine components, so they opt into
+/// [`Component`] here (the orphan rule requires the impls to live in the crate
+/// that owns the trait).
+impl Component for spawn_core::Transform3D {}
+impl Component for spawn_core::Transform2D {}
+
 /// Dense, contiguous identifier assigned to a component type in registration
 /// order, starting at `0`. Canonical key for column layout and access sets.
 #[repr(transparent)]
