@@ -70,9 +70,9 @@ pub struct RenderGraph {
     /// ([`RenderGraph::add_pass`]). `Cell` because validation is logically a
     /// read (`validate(&self)`) but must record that this exact pass set passed,
     /// so [`crate::frame::FrameContext::execute`] can refuse an unvalidated or
-    /// since-mutated graph before recording anything (audit finding #5: an
-    /// unvalidated two-surface-pass graph would otherwise clobber the singleton
-    /// camera/model uniforms).
+    /// since-mutated graph before recording anything: an unvalidated
+    /// two-surface-pass graph would otherwise clobber the singleton
+    /// camera/model uniforms.
     validated: Cell<bool>,
 }
 

@@ -367,7 +367,7 @@ impl<'w> Renderer<'w> {
     /// Uploads `uniform` into the renderer-owned camera buffer in place; no
     /// reallocation. Called once per frame from the forward pass.
     ///
-    /// Invariant (finding B): the camera and per-draw model buffers are
+    /// Invariant: the camera and per-draw model buffers are
     /// singletons submitted once at `end_frame`. A second surface pass in the
     /// same frame would overwrite this buffer before submission, clobbering the
     /// first pass. [`crate::graph::RenderGraph::validate`] enforces exactly one

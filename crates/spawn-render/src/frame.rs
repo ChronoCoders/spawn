@@ -105,8 +105,8 @@ impl FrameContext<'_, '_> {
     /// Records every pass of the `graph` against `scene`. The graph must have
     /// passed [`RenderGraph::validate`] with no intervening mutation: `execute`
     /// returns [`RenderError::InvalidArgument`] before recording anything if it
-    /// has not (audit finding #5 — recording an unvalidated graph could clobber
-    /// the singleton camera/model uniforms or silently no-op an empty graph).
+    /// has not — recording an unvalidated graph could clobber the singleton
+    /// camera/model uniforms or silently no-op an empty graph.
     /// Phase 1 records each [`PassKind::ForwardOpaque`] pass via the forward
     /// pass. No heap allocation occurs in this path.
     pub fn execute(&mut self, graph: &RenderGraph, scene: &RenderScene) -> RenderResult<()> {
