@@ -588,3 +588,146 @@ fn disconnect_salt_is_validated() {
         "correct salt must disconnect"
     );
 }
+
+/// Hand-roll a raw client through the handshake and return (server, socket, connect_salt).
+/// Mirrors the setup in `disconnect_salt_is_validated` so KeepAlive validation can be
+/// exercised against a real `Server` with full control over packet contents.
+fn raw_connected(client_salt: u64) -> (Server, UdpSocket, u64) {
+    const HEADER_SIZE: usize = 14;
+    const PROTOCOL_ID: u32 = 0x5350_4E31;
+
+    let mut server = server_on(4);
+    let saddr = server.local_addr().unwrap();
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    sock.set_nonblocking(true).unwrap();
+
+    let mut pkt = [0u8; 64];
+    let write_header = |pkt: &mut [u8], ty: u8| {
+        pkt[0..4].copy_from_slice(&PROTOCOL_ID.to_le_bytes());
+        pkt[4] = ty;
+        pkt[5..7].copy_from_slice(&0u16.to_le_bytes());
+        pkt[7..9].copy_from_slice(&0u16.to_le_bytes());
+        pkt[9..13].copy_from_slice(&0u32.to_le_bytes());
+        pkt[13] = 0xFF;
+    };
+
+    write_header(&mut pkt, 0); // ConnectRequest
+    pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&client_salt.to_le_bytes());
+    sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
+
+    let mut server_salt = None;
+    for _ in 0..50 {
+        let _ = server.poll().unwrap().count();
+        let mut rbuf = [0u8; 64];
+        if let Ok((len, _)) = sock.recv_from(&mut rbuf) {
+            if len >= HEADER_SIZE + 16 && rbuf[4] == 1 {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&rbuf[HEADER_SIZE + 8..HEADER_SIZE + 16]);
+                server_salt = Some(u64::from_le_bytes(b));
+                break;
+            }
+        }
+        std::thread::yield_now();
+    }
+    let server_salt = server_salt.expect("no Challenge");
+    let connect_salt = client_salt ^ server_salt;
+
+    write_header(&mut pkt, 2); // ChallengeResponse
+    pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&connect_salt.to_le_bytes());
+    sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
+
+    for _ in 0..50 {
+        let _ = server.poll().unwrap().count();
+        if server.connected_clients() == 1 {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert_eq!(server.connected_clients(), 1, "handshake did not complete");
+    (server, sock, connect_salt)
+}
+
+#[test]
+fn spoofed_keepalive_does_not_refresh_timeout() {
+    // A KeepAlive carrying the WRONG salt from the connected peer's address must be
+    // ignored: it must not refresh the victim's timeout, so the connection still times
+    // out on schedule (mirrors the Disconnect salt-validation guard, §5.2/§5.3).
+    const HEADER_SIZE: usize = 14;
+    const PROTOCOL_ID: u32 = 0x5350_4E31;
+
+    let (mut server, sock, connect_salt) = raw_connected(0x0123_4567_89AB_CDEF);
+
+    let mut pkt = [0u8; 64];
+    let write_keepalive = |pkt: &mut [u8], salt: u64| {
+        pkt[0..4].copy_from_slice(&PROTOCOL_ID.to_le_bytes());
+        pkt[4] = 5; // KeepAlive
+        pkt[5..7].copy_from_slice(&0u16.to_le_bytes());
+        pkt[7..9].copy_from_slice(&0u16.to_le_bytes());
+        pkt[9..13].copy_from_slice(&0u32.to_le_bytes());
+        pkt[13] = 0xFF;
+        pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&salt.to_le_bytes());
+    };
+
+    // Spam wrong-salt KeepAlives while waiting past CONNECTION_TIMEOUT. If the salt check
+    // were missing, these would refresh `last_recv` and the connection would never drop.
+    let deadline = Instant::now() + spawn_net::CONNECTION_TIMEOUT + Duration::from_secs(2);
+    let mut timed_out = false;
+    while Instant::now() < deadline {
+        write_keepalive(&mut pkt, !connect_salt);
+        let _ = sock.send_to(&pkt[..HEADER_SIZE + 8], server.local_addr().unwrap());
+        for ev in server.poll().unwrap() {
+            if let NetEvent::Disconnected { reason, .. } = ev {
+                assert_eq!(reason, DisconnectReason::TimedOut);
+                timed_out = true;
+            }
+        }
+        if timed_out {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        timed_out,
+        "spoofed-salt KeepAlive must not keep the connection alive"
+    );
+    assert_eq!(server.connected_clients(), 0);
+}
+
+#[test]
+fn correct_keepalive_refreshes_timeout() {
+    // The dual of the spoofed case: a correct-salt KeepAlive sent steadily keeps the
+    // connection alive across what would otherwise be the timeout window.
+    const HEADER_SIZE: usize = 14;
+    const PROTOCOL_ID: u32 = 0x5350_4E31;
+
+    let (mut server, sock, connect_salt) = raw_connected(0x0FED_CBA9_8765_4321);
+
+    let mut pkt = [0u8; 64];
+    let write_keepalive = |pkt: &mut [u8], salt: u64| {
+        pkt[0..4].copy_from_slice(&PROTOCOL_ID.to_le_bytes());
+        pkt[4] = 5; // KeepAlive
+        pkt[5..7].copy_from_slice(&0u16.to_le_bytes());
+        pkt[7..9].copy_from_slice(&0u16.to_le_bytes());
+        pkt[9..13].copy_from_slice(&0u32.to_le_bytes());
+        pkt[13] = 0xFF;
+        pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&salt.to_le_bytes());
+    };
+
+    // Drive correct-salt KeepAlives steadily for longer than CONNECTION_TIMEOUT.
+    let deadline = Instant::now() + spawn_net::CONNECTION_TIMEOUT + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        write_keepalive(&mut pkt, connect_salt);
+        let _ = sock.send_to(&pkt[..HEADER_SIZE + 8], server.local_addr().unwrap());
+        for ev in server.poll().unwrap() {
+            if let NetEvent::Disconnected { .. } = ev {
+                panic!("correct-salt KeepAlive must keep the connection alive");
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        server.connected_clients(),
+        1,
+        "connection should remain alive under correct-salt KeepAlive"
+    );
+}

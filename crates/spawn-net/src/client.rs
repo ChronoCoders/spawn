@@ -11,7 +11,8 @@ use crate::connection::{
 use crate::error::{NetError, NetResult};
 use crate::event::{ClientId, EventRecord, NetEventIter};
 use crate::protocol::{
-    PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_ID,
+    control_layout, PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE,
+    PROTOCOL_ID,
 };
 use crate::stats::ConnectionStats;
 
@@ -181,23 +182,24 @@ impl Client {
     }
 
     fn on_challenge(&mut self, len: usize) {
-        if len < HEADER_SIZE + 16 {
+        if len < HEADER_SIZE + control_layout::CHALLENGE_LEN {
             return;
         }
         let Some(h) = &mut self.handshake else {
             return;
         };
-        let echoed = read_u64(&self.recv_buf[HEADER_SIZE..]);
+        let echoed = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
         if echoed != h.client_salt {
             return;
         }
-        let server_salt = read_u64(&self.recv_buf[HEADER_SIZE + 8..]);
+        let server_salt =
+            read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SERVER_SALT_OFFSET..]);
         h.server_salt = Some(server_salt);
         h.connect_salt = Some(h.client_salt ^ server_salt);
     }
 
     fn on_accepted(&mut self, len: usize, now: Instant) {
-        if len < HEADER_SIZE + 12 {
+        if len < HEADER_SIZE + control_layout::CONNECT_ACCEPTED_LEN {
             return;
         }
         let Some(h) = &self.handshake else {
@@ -206,11 +208,11 @@ impl Client {
         let Some(connect_salt) = h.connect_salt else {
             return;
         };
-        let echoed = read_u64(&self.recv_buf[HEADER_SIZE..]);
+        let echoed = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
         if echoed != connect_salt {
             return;
         }
-        let raw_id = read_u32(&self.recv_buf[HEADER_SIZE + 8..]);
+        let raw_id = read_u32(&self.recv_buf[HEADER_SIZE + control_layout::CLIENT_ID_OFFSET..]);
         let client_id = ClientId(raw_id);
         let server = h.server;
         self.conn = Some(Connection::new(server, client_id, connect_salt, now));
@@ -221,14 +223,15 @@ impl Client {
     }
 
     fn on_denied(&mut self, len: usize) {
-        if len < HEADER_SIZE + 1 {
+        if len < HEADER_SIZE + control_layout::CONNECT_DENIED_LEN {
             return;
         }
         if self.state != ClientState::Connecting {
             return;
         }
         let reason =
-            DenyReason::from_u8(self.recv_buf[HEADER_SIZE]).unwrap_or(DenyReason::ServerFull);
+            DenyReason::from_u8(self.recv_buf[HEADER_SIZE + control_layout::REASON_OFFSET])
+                .unwrap_or(DenyReason::ServerFull);
         self.state = ClientState::Disconnected;
         self.handshake = None;
         self.events.push(EventRecord::Disconnected {
@@ -276,20 +279,27 @@ impl Client {
     }
 
     fn on_keep_alive(&mut self, header: PacketHeader, len: usize, now: Instant) {
-        if len < HEADER_SIZE + 8 {
+        if len < HEADER_SIZE + control_layout::KEEP_ALIVE_LEN {
             return;
         }
+        let salt = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
+        // Validate the carried `connect_salt` BEFORE refreshing liveness, mirroring
+        // Disconnect (§5.3): a spoofed-source KeepAlive with the wrong salt must not
+        // refresh the connection's timeout deadline.
         if let Some(conn) = &mut self.conn {
+            if conn.connect_salt != salt {
+                return;
+            }
             conn.mark_recv(now, len);
             conn.on_control(&header, now);
         }
     }
 
     fn on_disconnect(&mut self, len: usize) {
-        if len < HEADER_SIZE + 8 {
+        if len < HEADER_SIZE + control_layout::DISCONNECT_LEN {
             return;
         }
-        let salt = read_u64(&self.recv_buf[HEADER_SIZE..]);
+        let salt = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
         // Reject a spoofed-source Disconnect: the carried salt must match the connection
         // identity (§5.3). Mismatches are ignored silently.
         if self.conn.as_ref().is_some_and(|c| c.connect_salt != salt) {
@@ -481,8 +491,12 @@ fn send_disconnect(
         channel: PacketHeader::NO_CHANNEL,
     };
     header.encode(scratch.as_mut_slice())?;
-    scratch[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&connect_salt.to_le_bytes());
-    match socket.send_to(&scratch[..HEADER_SIZE + 8], addr) {
+    let salt_at = HEADER_SIZE + control_layout::SALT_OFFSET;
+    scratch[salt_at..salt_at + 8].copy_from_slice(&connect_salt.to_le_bytes());
+    match socket.send_to(
+        &scratch[..HEADER_SIZE + control_layout::DISCONNECT_LEN],
+        addr,
+    ) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
         Err(e) => Err(NetError::Io(e)),

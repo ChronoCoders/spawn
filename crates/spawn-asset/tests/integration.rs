@@ -316,6 +316,61 @@ fn concurrent_load_stress() {
 }
 
 #[test]
+fn full_queue_defers_and_drains_over_multiple_pumps() {
+    // One worker + capacity-1 queue: a burst of loads cannot all be submitted at
+    // once, so the server defers the overflow and retries it on later pumps. Big
+    // files keep the single worker busy long enough that the first pump cannot
+    // drain everything, exercising the defer -> retry -> drain path.
+    let dir = TempDir::new();
+    let n = 8usize;
+    let big = vec![b'x'; 512 * 1024];
+    for i in 0..n {
+        dir.write(&format!("q{i}.bin"), &big);
+    }
+    let mut srv = AssetServer::new(AssetServerConfig {
+        root: dir.path.clone(),
+        io_threads: 1,
+        queue_capacity: 1,
+        hot_reload: false,
+        debounce: Duration::from_millis(40),
+    })
+    .expect("server");
+    register_builtin_loaders(&mut srv).expect("builtin loaders");
+
+    let handles: Vec<_> = (0..n)
+        .map(|i| srv.load::<BinaryAsset>(&format!("q{i}.bin")))
+        .collect();
+
+    // First pump retries deferred jobs and applies whatever workers finished, but
+    // with capacity 1 and a single busy worker it cannot have drained all N.
+    let first = srv.apply_loaded();
+    let loaded_after_first = handles
+        .iter()
+        .filter(|h| srv.load_state(h) == LoadState::Loaded)
+        .count();
+    assert!(
+        loaded_after_first < n,
+        "first pump should not drain all {n} handles (got {loaded_after_first}, report {first:?})"
+    );
+
+    // A bounded pump loop must eventually drain every handle, proving deferred
+    // jobs are retried rather than dropped.
+    let start = Instant::now();
+    let mut loaded = loaded_after_first;
+    while loaded < n && start.elapsed() < Duration::from_secs(2) {
+        srv.apply_loaded();
+        loaded = handles
+            .iter()
+            .filter(|h| srv.load_state(h) == LoadState::Loaded)
+            .count();
+        if loaded < n {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    assert_eq!(loaded, n, "all deferred handles must eventually load");
+}
+
+#[test]
 fn clean_shutdown_joins_threads() {
     let dir = TempDir::new();
     dir.write("s.txt", b"x");

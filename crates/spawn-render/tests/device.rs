@@ -177,6 +177,62 @@ fn zero_net_engine_allocation_per_frame() {
 }
 
 #[test]
+fn execute_rejects_unvalidated_graph() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let draws: [DrawItem; 0] = [];
+    let scene = RenderScene {
+        camera: &camera,
+        draws: &draws,
+    };
+
+    // A structurally valid graph that was never validated must be refused by
+    // execute before any recording (audit finding #5).
+    let mut never_validated = RenderGraph::new();
+    never_validated.add_pass(RenderPassDesc {
+        name: "opaque",
+        kind: PassKind::ForwardOpaque,
+        color_target: ColorTarget::SurfaceColor,
+        depth_target: Some(DepthTarget::Default),
+        clear_color: Some(Color::new(0.1, 0.2, 0.3, 1.0)),
+        clear_depth: Some(1.0),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    });
+
+    // A graph validated and then mutated: the flag is cleared, so execute refuses.
+    let mut revalidated = graph();
+    revalidated.add_pass(RenderPassDesc {
+        name: "opaque2",
+        kind: PassKind::ForwardOpaque,
+        color_target: ColorTarget::SurfaceColor,
+        depth_target: Some(DepthTarget::Default),
+        clear_color: None,
+        clear_depth: None,
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    });
+
+    let mut frame = renderer.begin_frame().expect("begin");
+    assert!(
+        frame.execute(&never_validated, &scene).is_err(),
+        "execute accepted a never-validated graph"
+    );
+    assert!(
+        frame.execute(&revalidated, &scene).is_err(),
+        "execute accepted a graph mutated after validation"
+    );
+    // A validated graph still records cleanly on the same frame.
+    let valid = graph();
+    frame.execute(&valid, &scene).expect("execute valid");
+    frame.end_frame().expect("end");
+}
+
+#[test]
 fn resize_and_minimize_are_handled() {
     let Some((mut renderer, _guard)) = try_renderer() else {
         eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");

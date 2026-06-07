@@ -11,7 +11,8 @@ use crate::channel::{
 use crate::error::{NetError, NetResult};
 use crate::event::ClientId;
 use crate::protocol::{
-    PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_ID,
+    control_layout, PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE,
+    PROTOCOL_ID,
 };
 use crate::stats::{ConnectionStats, StatsTracker};
 
@@ -395,8 +396,10 @@ impl Connection {
             channel: PacketHeader::NO_CHANNEL,
         };
         header.encode(scratch)?;
-        scratch[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&self.connect_salt.to_le_bytes());
-        let total = HEADER_SIZE + 8;
+        // KeepAlive and Disconnect share an identical body: `connect_salt: u64` @ SALT_OFFSET.
+        let salt_at = HEADER_SIZE + control_layout::SALT_OFFSET;
+        scratch[salt_at..salt_at + 8].copy_from_slice(&self.connect_salt.to_le_bytes());
+        let total = HEADER_SIZE + control_layout::KEEP_ALIVE_LEN;
         socket.raw_send(&scratch[..total], self.addr)?;
         self.last_send = now;
         self.stats.on_sent(total);

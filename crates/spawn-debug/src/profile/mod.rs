@@ -9,8 +9,11 @@
 //!
 //! Allocation: node storage is pooled and reused across frames. `begin_frame`
 //! draws cleared `ScopeNode` buffers from a free pool; `end_frame` returns
-//! evicted history reports' buffers to that pool. After warm-up the steady-state
-//! frame path performs no heap allocation.
+//! evicted history reports' buffers to that pool. The frame path is
+//! allocation-free only once the scope tree's SHAPE and NAME SET have stabilized.
+//! A first-seen scope name, or a deeper/wider tree than any prior frame,
+//! allocates (a pool node, child-`Vec` growth, and a rolling-stats map entry).
+//! There is no depth or name-count bound.
 
 pub mod report;
 pub mod scope;

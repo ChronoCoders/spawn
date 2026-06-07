@@ -144,15 +144,30 @@ fn reload_preserves_id_and_state() {
     script_runner_system(&mut world, &mut e, 0.016);
     script_runner_system(&mut world, &mut e, 0.016);
 
+    // After two v1 updates state.count == 1 (init sets 0, one update +1; the
+    // second update runs after the reload below). v2 asserts the inherited value
+    // before mutating it: a lost or reset state aborts the script (Lua assert ->
+    // Failed) and the Active check at the end catches the regression.
     let v2 = r#"
-        function on_update(ent, dt) state.count = state.count + 10 end
+        function on_update(ent, dt)
+            assert(state.count == 1, "state lost across reload")
+            state.count = state.count + 10
+        end
     "#;
     e.reload(id, v2).unwrap();
     assert!(e.is_loaded(id));
 
     script_runner_system(&mut world, &mut e, 0.016);
-    // state.count persisted: 0 -> +1 (frame1 init counts 0, update +1) ...
-    // We assert no panic and the script remains active.
+    let script = world.get::<Script>(entity).unwrap();
+    assert_eq!(script.state.lifecycle(), ScriptLifecycle::Active);
+
+    // v3 asserts the post-reload mutation took effect (1 + 10 == 11), proving the
+    // reloaded body's state write persisted into the next frame.
+    let v3 = r#"
+        function on_update(ent, dt) assert(state.count == 11, "post-reload state value wrong") end
+    "#;
+    e.reload(id, v3).unwrap();
+    script_runner_system(&mut world, &mut e, 0.016);
     let script = world.get::<Script>(entity).unwrap();
     assert_eq!(script.state.lifecycle(), ScriptLifecycle::Active);
 }

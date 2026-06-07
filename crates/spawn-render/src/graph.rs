@@ -4,6 +4,8 @@
 //! wgpu performs the actual GPU synchronization; this graph makes ordering and
 //! resource I/O visible and validates them. It inserts no barriers (Phase 2).
 
+use std::cell::Cell;
+
 use spawn_core::Color;
 
 use crate::error::{RenderError, RenderResult};
@@ -64,6 +66,14 @@ pub struct RenderPassDesc {
 /// never in the frame loop.
 pub struct RenderGraph {
     passes: Vec<RenderPassDesc>,
+    /// Set by [`RenderGraph::validate`] on success, cleared by any mutation
+    /// ([`RenderGraph::add_pass`]). `Cell` because validation is logically a
+    /// read (`validate(&self)`) but must record that this exact pass set passed,
+    /// so [`crate::frame::FrameContext::execute`] can refuse an unvalidated or
+    /// since-mutated graph before recording anything (audit finding #5: an
+    /// unvalidated two-surface-pass graph would otherwise clobber the singleton
+    /// camera/model uniforms).
+    validated: Cell<bool>,
 }
 
 impl Default for RenderGraph {
@@ -74,17 +84,32 @@ impl Default for RenderGraph {
 
 impl RenderGraph {
     pub fn new() -> Self {
-        Self { passes: Vec::new() }
+        Self {
+            passes: Vec::new(),
+            validated: Cell::new(false),
+        }
     }
 
     /// Appends `desc` in execution order.
+    ///
+    /// Mutating the graph invalidates any prior validation: the validated flag is
+    /// cleared so a graph changed after [`RenderGraph::validate`] must be
+    /// re-validated before [`crate::frame::FrameContext::execute`] will record it.
     pub fn add_pass(&mut self, desc: RenderPassDesc) -> &mut Self {
         self.passes.push(desc);
+        self.validated.set(false);
         self
     }
 
     pub fn passes(&self) -> &[RenderPassDesc] {
         &self.passes
+    }
+
+    /// Whether the current pass set has passed [`RenderGraph::validate`] with no
+    /// intervening mutation. `execute` gates on this; a graph that was never
+    /// validated, or was mutated after validation, returns `false`.
+    pub(crate) fn is_validated(&self) -> bool {
+        self.validated.get()
     }
 
     /// Validates ordering and resource I/O. `Err(InvalidArgument)` if the graph
@@ -150,6 +175,7 @@ impl RenderGraph {
             });
         }
 
+        self.validated.set(true);
         Ok(())
     }
 }
@@ -198,6 +224,36 @@ mod tests {
         let mut g = RenderGraph::new();
         g.add_pass(opaque_pass(ColorTarget::Texture("gbuffer"), Vec::new()));
         assert!(g.validate().is_err());
+    }
+
+    #[test]
+    fn fresh_graph_is_not_validated() {
+        assert!(!RenderGraph::new().is_validated());
+    }
+
+    #[test]
+    fn successful_validate_marks_validated() {
+        let mut g = RenderGraph::new();
+        g.add_pass(opaque_pass(ColorTarget::SurfaceColor, Vec::new()));
+        assert!(g.validate().is_ok());
+        assert!(g.is_validated());
+    }
+
+    #[test]
+    fn failed_validate_leaves_graph_unvalidated() {
+        let g = RenderGraph::new();
+        assert!(g.validate().is_err());
+        assert!(!g.is_validated());
+    }
+
+    #[test]
+    fn add_pass_clears_validated_flag() {
+        let mut g = RenderGraph::new();
+        g.add_pass(opaque_pass(ColorTarget::SurfaceColor, Vec::new()));
+        assert!(g.validate().is_ok());
+        assert!(g.is_validated());
+        g.add_pass(opaque_pass(ColorTarget::SurfaceColor, Vec::new()));
+        assert!(!g.is_validated());
     }
 
     #[test]

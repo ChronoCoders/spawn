@@ -14,6 +14,45 @@ pub const MAX_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - HEADER_SIZE;
 /// Number of prior sequences acknowledged by the `ack_bits` field.
 pub const ACK_BITS: u32 = 32;
 
+/// Control-packet payload layouts (offsets relative to the start of the body, i.e. byte
+/// `HEADER_SIZE` of the datagram). Every field is little-endian. Encode and decode sites
+/// reference these constants so the two stay in agreement by construction.
+///
+/// - `ConnectRequest`: `client_salt: u64` @ `SALT_OFFSET` (len `CONNECT_REQUEST_LEN`).
+/// - `Challenge`: `client_salt: u64` @ `SALT_OFFSET`, `server_salt: u64` @
+///   `SERVER_SALT_OFFSET` (len `CHALLENGE_LEN`).
+/// - `ChallengeResponse`: `connect_salt: u64` @ `SALT_OFFSET` (len `CHALLENGE_RESPONSE_LEN`).
+/// - `ConnectAccepted`: `connect_salt: u64` @ `SALT_OFFSET`, `client_id: u32` @
+///   `CLIENT_ID_OFFSET` (len `CONNECT_ACCEPTED_LEN`).
+/// - `ConnectDenied`: `reason: u8` @ `REASON_OFFSET` (len `CONNECT_DENIED_LEN`).
+/// - `KeepAlive`: `connect_salt: u64` @ `SALT_OFFSET` (len `KEEP_ALIVE_LEN`).
+/// - `Disconnect`: `connect_salt: u64` @ `SALT_OFFSET` (len `DISCONNECT_LEN`).
+pub(crate) mod control_layout {
+    /// Offset of the leading salt field (`client_salt`/`connect_salt`) in every salted body.
+    pub(crate) const SALT_OFFSET: usize = 0;
+    /// Offset of `server_salt` in a `Challenge` body.
+    pub(crate) const SERVER_SALT_OFFSET: usize = 8;
+    /// Offset of `client_id` in a `ConnectAccepted` body.
+    pub(crate) const CLIENT_ID_OFFSET: usize = 8;
+    /// Offset of `reason` in a `ConnectDenied` body.
+    pub(crate) const REASON_OFFSET: usize = 0;
+
+    /// `ConnectRequest` body length: one `u64` salt.
+    pub(crate) const CONNECT_REQUEST_LEN: usize = 8;
+    /// `Challenge` body length: two `u64` salts.
+    pub(crate) const CHALLENGE_LEN: usize = 16;
+    /// `ChallengeResponse` body length: one `u64` salt.
+    pub(crate) const CHALLENGE_RESPONSE_LEN: usize = 8;
+    /// `ConnectAccepted` body length: one `u64` salt + one `u32` client id.
+    pub(crate) const CONNECT_ACCEPTED_LEN: usize = 12;
+    /// `ConnectDenied` body length: one `u8` reason.
+    pub(crate) const CONNECT_DENIED_LEN: usize = 1;
+    /// `KeepAlive` body length: one `u64` salt.
+    pub(crate) const KEEP_ALIVE_LEN: usize = 8;
+    /// `Disconnect` body length: one `u64` salt.
+    pub(crate) const DISCONNECT_LEN: usize = 8;
+}
+
 /// Packet kind discriminant carried at header offset 4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

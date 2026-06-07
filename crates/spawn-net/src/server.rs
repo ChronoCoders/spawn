@@ -11,7 +11,8 @@ use crate::connection::{
 use crate::error::{NetError, NetResult};
 use crate::event::{ClientId, EventRecord, NetEventIter};
 use crate::protocol::{
-    PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_ID,
+    control_layout, PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE,
+    PROTOCOL_ID,
 };
 use crate::stats::ConnectionStats;
 
@@ -178,14 +179,14 @@ impl Server {
     }
 
     fn on_connect_request(&mut self, from: SocketAddr, len: usize, now: Instant) -> NetResult<()> {
-        if len < HEADER_SIZE + 8 {
+        if len < HEADER_SIZE + control_layout::CONNECT_REQUEST_LEN {
             return Ok(());
         }
         // Already connected from this address: ignore duplicate request.
         if self.slot_index_of(from).is_some() {
             return Ok(());
         }
-        let client_salt = read_u64(&self.recv_buf[HEADER_SIZE..]);
+        let client_salt = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
 
         if self.free_slot().is_none() {
             return self.send_denied(from, DenyReason::ServerFull);
@@ -213,14 +214,14 @@ impl Server {
         len: usize,
         now: Instant,
     ) -> NetResult<()> {
-        if len < HEADER_SIZE + 8 {
+        if len < HEADER_SIZE + control_layout::CHALLENGE_RESPONSE_LEN {
             return Ok(());
         }
         // Idempotent: a resent response from an already-connected peer is harmless.
         if self.slot_index_of(from).is_some() {
             return Ok(());
         }
-        let connect_salt = read_u64(&self.recv_buf[HEADER_SIZE..]);
+        let connect_salt = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
         let Some(pos) = self.pending.iter().position(|p| p.addr == from) else {
             return Ok(());
         };
@@ -258,15 +259,30 @@ impl Server {
         let Some(slot) = self.slot_index_of(from) else {
             return Ok(());
         };
+        if is_keep_alive {
+            // Validate the carried `connect_salt` BEFORE refreshing liveness, mirroring
+            // Disconnect (§5.3): a spoofed-source KeepAlive with the wrong salt must not
+            // refresh the victim's timeout deadline. Length guarded by the caller path.
+            if len < HEADER_SIZE + control_layout::KEEP_ALIVE_LEN {
+                return Ok(());
+            }
+            let salt_at = payload_start + control_layout::SALT_OFFSET;
+            let salt = read_u64(&self.recv_buf[salt_at..]);
+            let Slot::Connected(conn) = &mut self.slots[slot] else {
+                return Ok(());
+            };
+            if conn.connect_salt != salt {
+                return Ok(());
+            }
+            conn.mark_recv(now, len);
+            conn.on_control(&header, now);
+            return Ok(());
+        }
+
         let Slot::Connected(conn) = &mut self.slots[slot] else {
             return Ok(());
         };
         conn.mark_recv(now, len);
-
-        if is_keep_alive {
-            conn.on_control(&header, now);
-            return Ok(());
-        }
 
         let Ok(channel) = ChannelId::try_from(header.channel) else {
             return Ok(());
@@ -308,10 +324,10 @@ impl Server {
     }
 
     fn on_disconnect_packet(&mut self, from: SocketAddr, len: usize) {
-        if len < HEADER_SIZE + 8 {
+        if len < HEADER_SIZE + control_layout::DISCONNECT_LEN {
             return;
         }
-        let salt = read_u64(&self.recv_buf[HEADER_SIZE..]);
+        let salt = read_u64(&self.recv_buf[HEADER_SIZE + control_layout::SALT_OFFSET..]);
         if let Some(slot) = self.slot_index_of(from) {
             if let Slot::Connected(conn) = &self.slots[slot] {
                 // Reject a spoofed-source Disconnect: the carried salt must match the
@@ -383,9 +399,11 @@ impl Server {
         client_salt: u64,
         server_salt: u64,
     ) -> NetResult<()> {
-        let mut body = [0u8; 16];
-        body[..8].copy_from_slice(&client_salt.to_le_bytes());
-        body[8..].copy_from_slice(&server_salt.to_le_bytes());
+        let mut body = [0u8; control_layout::CHALLENGE_LEN];
+        body[control_layout::SALT_OFFSET..control_layout::SALT_OFFSET + 8]
+            .copy_from_slice(&client_salt.to_le_bytes());
+        body[control_layout::SERVER_SALT_OFFSET..control_layout::SERVER_SALT_OFFSET + 8]
+            .copy_from_slice(&server_salt.to_le_bytes());
         self.send_control_to(to, PacketType::Challenge, &body)
     }
 
@@ -395,14 +413,17 @@ impl Server {
         connect_salt: u64,
         client_id: ClientId,
     ) -> NetResult<()> {
-        let mut body = [0u8; 12];
-        body[..8].copy_from_slice(&connect_salt.to_le_bytes());
-        body[8..].copy_from_slice(&client_id.0.to_le_bytes());
+        let mut body = [0u8; control_layout::CONNECT_ACCEPTED_LEN];
+        body[control_layout::SALT_OFFSET..control_layout::SALT_OFFSET + 8]
+            .copy_from_slice(&connect_salt.to_le_bytes());
+        body[control_layout::CLIENT_ID_OFFSET..control_layout::CLIENT_ID_OFFSET + 4]
+            .copy_from_slice(&client_id.0.to_le_bytes());
         self.send_control_to(to, PacketType::ConnectAccepted, &body)
     }
 
     fn send_denied(&mut self, to: SocketAddr, reason: DenyReason) -> NetResult<()> {
-        let body = [reason.to_u8()];
+        let mut body = [0u8; control_layout::CONNECT_DENIED_LEN];
+        body[control_layout::REASON_OFFSET] = reason.to_u8();
         self.send_control_to(to, PacketType::ConnectDenied, &body)
     }
 
@@ -545,8 +566,12 @@ fn send_disconnect(
         channel: PacketHeader::NO_CHANNEL,
     };
     header.encode(scratch.as_mut_slice())?;
-    scratch[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&connect_salt.to_le_bytes());
-    match socket.send_to(&scratch[..HEADER_SIZE + 8], addr) {
+    let salt_at = HEADER_SIZE + control_layout::SALT_OFFSET;
+    scratch[salt_at..salt_at + 8].copy_from_slice(&connect_salt.to_le_bytes());
+    match socket.send_to(
+        &scratch[..HEADER_SIZE + control_layout::DISCONNECT_LEN],
+        addr,
+    ) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
         Err(e) => Err(NetError::Io(e)),
