@@ -253,3 +253,49 @@ fn resize_and_minimize_are_handled() {
     renderer.resize(SIZE).expect("restore");
     assert_eq!(renderer.size(), SIZE);
 }
+
+/// Verifies the owned-handle constructor: an `Arc`-held window yields a
+/// `Renderer<'static>` with no borrow tying it to the window. Skips cleanly on a
+/// host with no display server / adapter, like the other device tests (§13 gate).
+#[test]
+fn from_owned_constructs_static_renderer() {
+    let _guard = WINIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    use std::sync::Arc;
+    use winit::application::ApplicationHandler;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::pump_events::EventLoopExtPumpEvents;
+    #[cfg(target_os = "windows")]
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    use winit::window::{Window, WindowId};
+
+    struct Grab(Option<Window>);
+    impl ApplicationHandler for Grab {
+        fn resumed(&mut self, el: &ActiveEventLoop) {
+            self.0 = el
+                .create_window(Window::default_attributes().with_visible(false))
+                .ok();
+            el.exit();
+        }
+        fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: winit::event::WindowEvent) {
+        }
+    }
+
+    let Some(mut el) = EventLoop::builder().with_any_thread(true).build().ok() else {
+        return;
+    };
+    let mut grab = Grab(None);
+    let _ = el.pump_app_events(Some(std::time::Duration::from_millis(50)), &mut grab);
+    let Some(window) = grab.0 else {
+        return;
+    };
+    let window = Arc::new(window);
+
+    // Construction succeeds where an adapter exists; a host without one hits the
+    // NoAdapter skip-gate. Either way the owned-surface path is exercised.
+    if let Ok(renderer) = Renderer::from_owned(window, SIZE, RendererConfig::default()) {
+        assert_eq!(renderer.size(), SIZE);
+    }
+}

@@ -152,6 +152,19 @@ impl<'w> Renderer<'w> {
             .create_surface(wgpu::SurfaceTarget::Window(Box::new(WindowRef(window))))
             .map_err(|_| RenderError::Surface)?;
 
+        Self::from_instance_surface(instance, surface, size, config)
+    }
+
+    /// Initializes the GPU against an already-created instance and surface, the
+    /// shared tail of [`new`](Renderer::new) and
+    /// [`from_owned`](Renderer::from_owned). The `'w` lifetime is the surface's;
+    /// for an owned window source it is `'static`.
+    fn from_instance_surface(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'w>,
+        size: SurfaceSize,
+        config: RendererConfig,
+    ) -> RenderResult<Self> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: config.power_preference,
             force_fallback_adapter: false,
@@ -418,6 +431,36 @@ impl<'w> Renderer<'w> {
     }
 }
 
+impl Renderer<'static> {
+    /// Creates a renderer that *owns* its window handle through an `Arc`, so the
+    /// surface lifetime is `'static` and the renderer can be stored without a
+    /// borrow tying it to the window. Used by long-lived engine wrappers (the
+    /// surface keeps the window alive for its own lifetime). Same error contract
+    /// as [`new`](Renderer::new).
+    pub fn from_owned<W: HasWindowHandleSet + 'static>(
+        window: Arc<W>,
+        size: SurfaceSize,
+        config: RendererConfig,
+    ) -> RenderResult<Self> {
+        if size.is_zero() {
+            return Err(RenderError::InvalidArgument {
+                context: "initial surface size is zero",
+            });
+        }
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Window(Box::new(OwnedWindow(window))))
+            .map_err(|_| RenderError::Surface)?;
+
+        Self::from_instance_surface(instance, surface, size, config)
+    }
+}
+
 const INITIAL_MODEL_CAPACITY: u32 = 256;
 
 fn align_up(value: u64, align: u64) -> u64 {
@@ -467,6 +510,27 @@ impl<W: HasWindowHandleSet> HasWindowHandle for WindowRef<'_, W> {
 }
 
 impl<W: HasWindowHandleSet> HasDisplayHandle for WindowRef<'_, W> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.0.display_handle()
+    }
+}
+
+/// Owned counterpart to [`WindowRef`]: holds an `Arc` to the window so the
+/// surface owns it and lives `'static`. Delegates both handle accessors to the
+/// wrapped window; no `unsafe`.
+struct OwnedWindow<W: HasWindowHandleSet + 'static>(Arc<W>);
+
+impl<W: HasWindowHandleSet> HasWindowHandle for OwnedWindow<W> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.0.window_handle()
+    }
+}
+
+impl<W: HasWindowHandleSet> HasDisplayHandle for OwnedWindow<W> {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
