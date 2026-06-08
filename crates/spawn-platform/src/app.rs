@@ -25,7 +25,9 @@ use crate::window::{Window, WindowConfig, WindowMode};
 ///
 /// All methods borrow the window; the app cannot move or store it, as its
 /// lifetime is bound to the loop. spawn-platform does not auto-close on
-/// `CloseRequested` — the app decides whether to exit.
+/// `CloseRequested` — the app decides whether to exit by calling
+/// [`Window::request_exit`](crate::Window::request_exit) from any callback; the
+/// loop then exits after the current iteration and fires [`exit`](PlatformApp::exit) once.
 pub trait PlatformApp {
     /// Called once after the window is created and before the first event.
     fn init(&mut self, window: &Window);
@@ -286,6 +288,13 @@ impl<A: PlatformApp> ApplicationHandler<()> for Handler<A> {
             return;
         }
         self.drive_iteration();
+        // An app callback may have requested exit during this iteration; honor it
+        // before the loop waits again so `run` returns promptly.
+        if let Some(window) = self.window.as_ref() {
+            if window.exit_requested() {
+                event_loop.exit();
+            }
+        }
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -472,5 +481,25 @@ mod tests {
         let event_loop = EventLoop::new().expect("event loop");
         let monitors = event_loop.available_monitors();
         assert!(!monitors.is_empty());
+    }
+
+    /// Requests exit from `init`, so a single iteration drives the loop to a
+    /// clean return rather than blocking forever.
+    struct ExitOnInitApp;
+
+    impl PlatformApp for ExitOnInitApp {
+        fn init(&mut self, window: &Window) {
+            window.request_exit();
+        }
+        fn event(&mut self, _window: &Window, _event: &PlatformEvent) {}
+    }
+
+    #[test]
+    #[ignore = "requires a display server; run with `cargo test -- --ignored` on a platform runner"]
+    fn app_request_exit_returns_from_run() {
+        let event_loop = EventLoop::new().expect("event loop");
+        event_loop
+            .run(WindowConfig::default().with_visible(false), ExitOnInitApp)
+            .expect("run returns cleanly after request_exit");
     }
 }

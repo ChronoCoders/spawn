@@ -134,6 +134,7 @@ pub struct Window {
     inner: winit::window::Window,
     vsync: bool,
     mode: Cell<WindowMode>,
+    exit_requested: Cell<bool>,
 }
 
 impl Window {
@@ -142,6 +143,7 @@ impl Window {
             inner,
             vsync,
             mode: Cell::new(mode),
+            exit_requested: Cell::new(false),
         }
     }
 
@@ -217,6 +219,22 @@ impl Window {
     /// Schedules a `redraw_requested` callback on the next loop iteration.
     pub fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+
+    /// Requests that the run loop exit after the current iteration completes.
+    ///
+    /// spawn-platform does not auto-close on `CloseRequested`; an app calls this
+    /// to shut down cleanly. [`PlatformApp::exit`](crate::PlatformApp::exit) then
+    /// fires exactly once before [`EventLoop::run`](crate::EventLoop::run)
+    /// returns. Idempotent: repeated calls are equivalent to one.
+    pub fn request_exit(&self) {
+        self.exit_requested.set(true);
+    }
+
+    /// Whether [`request_exit`](Window::request_exit) has been called; checked by
+    /// the run loop once per iteration to decide whether to exit.
+    pub(crate) fn exit_requested(&self) -> bool {
+        self.exit_requested.get()
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {
