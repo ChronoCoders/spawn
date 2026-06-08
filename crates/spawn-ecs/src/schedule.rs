@@ -233,13 +233,17 @@ impl Schedule {
 
     /// Runs every stage in order, applying each stage's command buffers at its
     /// boundary so a later stage observes earlier structural changes. After the
-    /// first build/run, no allocation occurs in this path. A system error aborts
-    /// the failing stage (after its batch joins) and is returned; that stage's
-    /// pending command buffers are discarded.
+    /// first build/run, no allocation occurs in this path. After all stages
+    /// complete, swaps every event double buffer once
+    /// ([`World::update_events`](World::update_events)) — the single end-of-frame
+    /// stage boundary. A system error aborts the failing stage (after its batch
+    /// joins) and is returned; that stage's pending command buffers are discarded
+    /// and the event swap is skipped for that frame.
     pub fn run(&mut self, world: &mut World) -> EcsResult<()> {
         for stage in &mut self.stages {
             stage.run(world)?;
         }
+        world.update_events();
         Ok(())
     }
 }
@@ -291,6 +295,41 @@ mod tests {
             stage.batch_count(),
             1,
             "two readers of R must share a batch"
+        );
+    }
+
+    struct Ev;
+    impl crate::events::Event for Ev {}
+
+    #[test]
+    fn event_writer_and_reader_conflict() {
+        use crate::events::{EventReader, EventWriter};
+        let mut world = World::new();
+        world.init_event::<Ev>();
+        let mut stage = Stage::new("s");
+        stage.add_system(|mut _w: EventWriter<'_, Ev>, _c: &mut Commands<'_>| Ok(()));
+        stage.add_system(|mut _r: EventReader<'_, '_, Ev>, _c: &mut Commands<'_>| Ok(()));
+        stage.build(&world).unwrap();
+        assert_eq!(
+            stage.batch_count(),
+            2,
+            "an event writer and reader of the same type must not share a batch"
+        );
+    }
+
+    #[test]
+    fn event_readers_share_a_batch() {
+        use crate::events::EventReader;
+        let mut world = World::new();
+        world.init_event::<Ev>();
+        let mut stage = Stage::new("s");
+        stage.add_system(|mut _r: EventReader<'_, '_, Ev>, _c: &mut Commands<'_>| Ok(()));
+        stage.add_system(|mut _r: EventReader<'_, '_, Ev>, _c: &mut Commands<'_>| Ok(()));
+        stage.build(&world).unwrap();
+        assert_eq!(
+            stage.batch_count(),
+            1,
+            "two event readers of the same type must share a batch"
         );
     }
 }

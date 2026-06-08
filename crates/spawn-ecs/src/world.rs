@@ -13,6 +13,7 @@ use crate::component::{
 };
 use crate::entity::{Entity, EntityAllocator};
 use crate::error::{EcsError, EcsResult};
+use crate::events::Event;
 use crate::query::{Query, QueryData};
 use crate::resource::{Res, ResMut, Resource, ResourceId, Resources};
 
@@ -23,6 +24,7 @@ pub struct World {
     archetypes: ArchetypeStore,
     command_buffer: CommandBuffer,
     resources: Resources,
+    event_updaters: Vec<fn(&mut World)>,
 }
 
 impl Default for World {
@@ -40,6 +42,7 @@ impl World {
             archetypes: ArchetypeStore::new(),
             command_buffer: CommandBuffer::new(),
             resources: Resources::new(),
+            event_updaters: Vec::new(),
         }
     }
 
@@ -225,6 +228,29 @@ impl World {
     /// tests/metrics and for system access resolution.
     pub fn resource_id<T: Resource>(&self) -> Option<ResourceId> {
         self.resources.id_of::<T>()
+    }
+
+    /// Registers an event type `T`: inserts an empty `Events<T>` resource (if
+    /// absent) and records its per-frame updater. Idempotent — a second call is a
+    /// no-op. `EventWriter<T>`/`EventReader<T>` require this before schedule build.
+    pub fn init_event<T: Event>(&mut self) {
+        if self.contains_resource::<crate::events::Events<T>>() {
+            return;
+        }
+        self.insert_resource(crate::events::Events::<T>::default());
+        self.event_updaters.push(crate::events::events_updater::<T>);
+    }
+
+    /// Swaps the double buffer of every initialized event type, dropping events
+    /// older than one frame. Called once per frame by
+    /// [`Schedule::run`](crate::schedule::Schedule::run); allocation-free.
+    pub fn update_events(&mut self) {
+        let mut i = 0;
+        while i < self.event_updaters.len() {
+            let updater = self.event_updaters[i];
+            updater(self);
+            i += 1;
+        }
     }
 
     pub(crate) fn apply_buffer(&mut self, buffer: &mut CommandBuffer) {
