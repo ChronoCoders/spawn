@@ -10,6 +10,8 @@
 use crate::bundle::Bundle;
 use crate::component::{AnyValue, Component, ComponentId, ComponentRegistry};
 use crate::entity::{Entity, EntityAllocator};
+use crate::resource::Resource;
+use crate::world::World;
 
 /// One recorded structural mutation.
 pub(crate) enum Command {
@@ -29,6 +31,27 @@ pub(crate) enum Command {
         entity: Entity,
         component: ComponentId,
     },
+    InsertResource {
+        apply: fn(&mut World, AnyValue),
+        value: AnyValue,
+    },
+    RemoveResource {
+        remove: fn(&mut World),
+    },
+}
+
+/// Monomorphic applier for a deferred resource insert: downcasts the erased
+/// value and stores it. A type mismatch is impossible (the value was boxed from
+/// `T` at record time) and silently ignored if it ever occurred.
+fn apply_insert_resource<T: Resource>(world: &mut World, value: AnyValue) {
+    if let Ok(boxed) = value.downcast::<T>() {
+        world.insert_resource(*boxed);
+    }
+}
+
+/// Monomorphic applier for a deferred resource remove; a no-op if `T` is absent.
+fn apply_remove_resource<T: Resource>(world: &mut World) {
+    let _ = world.remove_resource::<T>();
 }
 
 /// A reusable per-system buffer of recorded [`Command`]s.
@@ -117,6 +140,22 @@ impl<'w> Commands<'w> {
                 .commands
                 .push(Command::Remove { entity, component });
         }
+    }
+
+    /// Records a deferred resource insert, applied at the stage boundary against
+    /// `&mut World`. Overwrites any existing value of `T` at apply time.
+    pub fn insert_resource<T: Resource>(&mut self, value: T) {
+        self.buffer.commands.push(Command::InsertResource {
+            apply: apply_insert_resource::<T>,
+            value: Box::new(value),
+        });
+    }
+
+    /// Records a deferred resource remove; a no-op at apply time if `T` is absent.
+    pub fn remove_resource<T: Resource>(&mut self) {
+        self.buffer.commands.push(Command::RemoveResource {
+            remove: apply_remove_resource::<T>,
+        });
     }
 
     fn write_bundle<B: Bundle>(&self, bundle: B) -> Vec<(ComponentId, AnyValue)> {

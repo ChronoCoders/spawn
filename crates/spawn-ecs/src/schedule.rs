@@ -59,7 +59,7 @@ impl Stage {
     /// unregistered.
     pub fn build(&mut self, world: &World) -> EcsResult<()> {
         for entry in &mut self.systems {
-            entry.system.resolve_access(world.registry())?;
+            entry.system.resolve_access(world)?;
         }
         self.batches.clear();
         for idx in 0..self.systems.len() {
@@ -194,6 +194,13 @@ impl Stage {
     }
 }
 
+impl Stage {
+    #[cfg(test)]
+    pub(crate) fn batch_count(&self) -> usize {
+        self.batches.len()
+    }
+}
+
 /// An ordered list of stages run in sequence.
 pub struct Schedule {
     stages: Vec<Stage>,
@@ -234,5 +241,56 @@ impl Schedule {
             stage.run(world)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::Commands;
+    use crate::query::Query;
+    use crate::resource::{Res, ResMut, Resource};
+    use crate::world::World;
+
+    struct Marker;
+    impl crate::component::Component for Marker {}
+    struct R;
+    impl Resource for R {}
+
+    #[test]
+    fn resource_conflict_splits_batches() {
+        let mut world = World::new();
+        world.register::<Marker>();
+        world.insert_resource(R);
+        let mut stage = Stage::new("s");
+        stage.add_system(
+            |_q: Query<'_, &Marker, ()>, _r: ResMut<'_, R>, _c: &mut Commands<'_>| Ok(()),
+        );
+        stage
+            .add_system(|_q: Query<'_, &Marker, ()>, _r: Res<'_, R>, _c: &mut Commands<'_>| Ok(()));
+        stage.build(&world).unwrap();
+        assert_eq!(
+            stage.batch_count(),
+            2,
+            "writer and reader of R must not share a batch"
+        );
+    }
+
+    #[test]
+    fn distinct_resource_readers_share_a_batch() {
+        let mut world = World::new();
+        world.register::<Marker>();
+        world.insert_resource(R);
+        let mut stage = Stage::new("s");
+        stage
+            .add_system(|_q: Query<'_, &Marker, ()>, _r: Res<'_, R>, _c: &mut Commands<'_>| Ok(()));
+        stage
+            .add_system(|_q: Query<'_, &Marker, ()>, _r: Res<'_, R>, _c: &mut Commands<'_>| Ok(()));
+        stage.build(&world).unwrap();
+        assert_eq!(
+            stage.batch_count(),
+            1,
+            "two readers of R must share a batch"
+        );
     }
 }

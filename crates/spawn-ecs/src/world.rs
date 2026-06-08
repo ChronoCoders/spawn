@@ -14,6 +14,7 @@ use crate::component::{
 use crate::entity::{Entity, EntityAllocator};
 use crate::error::{EcsError, EcsResult};
 use crate::query::{Query, QueryData};
+use crate::resource::{Res, ResMut, Resource, ResourceId, Resources};
 
 /// Container of all entities, components, and archetype storage.
 pub struct World {
@@ -21,6 +22,7 @@ pub struct World {
     registry: ComponentRegistry,
     archetypes: ArchetypeStore,
     command_buffer: CommandBuffer,
+    resources: Resources,
 }
 
 impl Default for World {
@@ -37,6 +39,7 @@ impl World {
             registry: ComponentRegistry::new(),
             archetypes: ArchetypeStore::new(),
             command_buffer: CommandBuffer::new(),
+            resources: Resources::new(),
         }
     }
 
@@ -187,6 +190,43 @@ impl World {
         self.command_buffer = taken;
     }
 
+    /// Inserts `value` as the singleton resource of type `T`, registering `T`'s
+    /// id if new and overwriting any existing value.
+    pub fn insert_resource<T: Resource>(&mut self, value: T) {
+        self.resources.insert(value);
+    }
+
+    /// Removes and returns the resource of type `T`, leaving its id registered
+    /// with an empty slot. `None` if absent.
+    pub fn remove_resource<T: Resource>(&mut self) -> Option<T> {
+        self.resources.remove::<T>()
+    }
+
+    pub fn contains_resource<T: Resource>(&self) -> bool {
+        self.resources.contains::<T>()
+    }
+
+    /// Shared access to the resource of type `T`. Takes `&self` (a read guard via
+    /// interior mutability), so it is valid in a scheduled system holding
+    /// `&World`. `None` if `T` is absent.
+    pub fn get_resource<T: Resource>(&self) -> Option<Res<'_, T>> {
+        self.resources.get::<T>()
+    }
+
+    /// Exclusive access to the resource of type `T`. Takes `&self` (a write guard
+    /// via interior mutability); uncontended by the scheduler's conflict
+    /// relation, usable inside a system and via direct world access. `None` if
+    /// absent.
+    pub fn get_resource_mut<T: Resource>(&self) -> Option<ResMut<'_, T>> {
+        self.resources.get_mut::<T>()
+    }
+
+    /// The dense id of resource `T`, or `None` if `T` was never inserted. For
+    /// tests/metrics and for system access resolution.
+    pub fn resource_id<T: Resource>(&self) -> Option<ResourceId> {
+        self.resources.id_of::<T>()
+    }
+
     pub(crate) fn apply_buffer(&mut self, buffer: &mut CommandBuffer) {
         for command in buffer.drain() {
             match command {
@@ -218,6 +258,8 @@ impl World {
                         self.apply_remove(entity, component);
                     }
                 }
+                Command::InsertResource { apply, value } => apply(self, value),
+                Command::RemoveResource { remove } => remove(self),
             }
         }
     }

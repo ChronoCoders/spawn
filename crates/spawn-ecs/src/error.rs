@@ -39,6 +39,18 @@ pub enum EcsError {
     },
     /// A schedule was run before `build` sized its buffers and masks.
     ScheduleNotBuilt,
+    /// A system's `Res`/`ResMut` parameter named a resource type that was never
+    /// inserted into the world.
+    ResourceNotRegistered {
+        /// Type name of the unregistered resource.
+        resource: &'static str,
+    },
+    /// A system's `EventWriter`/`EventReader` named an event type for which
+    /// `World::init_event` was never called.
+    EventsNotInitialized {
+        /// Type name of the uninitialized event.
+        event: &'static str,
+    },
 }
 
 impl fmt::Display for EcsError {
@@ -60,6 +72,12 @@ impl fmt::Display for EcsError {
             }
             Self::SystemPanicked { system } => write!(f, "system panicked: {system}"),
             Self::ScheduleNotBuilt => write!(f, "schedule not built"),
+            Self::ResourceNotRegistered { resource } => {
+                write!(f, "resource not registered: {resource}")
+            }
+            Self::EventsNotInitialized { event } => {
+                write!(f, "events not initialized: {event}")
+            }
         }
     }
 }
@@ -86,6 +104,8 @@ mod tests {
             },
             EcsError::SystemPanicked { system: "s" },
             EcsError::ScheduleNotBuilt,
+            EcsError::ResourceNotRegistered { resource: "R" },
+            EcsError::EventsNotInitialized { event: "E" },
         ];
         for v in &variants {
             assert!(!v.to_string().is_empty());
