@@ -1,6 +1,6 @@
 //! Window configuration, the live window handle, and identifiers.
 
-use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
@@ -18,6 +18,24 @@ pub enum WindowMode {
     /// Exclusive video mode on the primary monitor, closest match to the
     /// requested size and refresh rate.
     ExclusiveFullscreen,
+}
+
+impl WindowMode {
+    const fn to_u8(self) -> u8 {
+        match self {
+            WindowMode::Windowed => 0,
+            WindowMode::BorderlessFullscreen => 1,
+            WindowMode::ExclusiveFullscreen => 2,
+        }
+    }
+
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => WindowMode::BorderlessFullscreen,
+            2 => WindowMode::ExclusiveFullscreen,
+            _ => WindowMode::Windowed,
+        }
+    }
 }
 
 /// Cursor confinement mode. `None` releases any grab and is the `Default`.
@@ -124,17 +142,19 @@ impl WindowConfig {
     }
 }
 
-/// A live OS window. Created by the run loop and passed by reference into
-/// [`crate::app::PlatformApp`] callbacks; not constructible downstream, not
-/// `Clone`, and bound to the loop's lifetime.
+/// A live OS window. Created by the run loop; not constructible downstream and
+/// not `Clone`. Shared into [`crate::app::PlatformApp`] callbacks — as an owning
+/// `Arc<Window>` to `init`, and by reference to the others.
 ///
 /// Implements [`HasWindowHandle`] and [`HasDisplayHandle`] so spawn-render can
-/// build a wgpu surface without depending on winit.
+/// build a wgpu surface without depending on winit. `Send + Sync` (its
+/// interior-mutable `mode`/`exit_requested` state uses atomics, not `Cell`) so an
+/// engine can hand it to spawn-render's surface as an `Arc<Window>`.
 pub struct Window {
     inner: winit::window::Window,
     vsync: bool,
-    mode: Cell<WindowMode>,
-    exit_requested: Cell<bool>,
+    mode: AtomicU8,
+    exit_requested: AtomicBool,
 }
 
 impl Window {
@@ -142,8 +162,8 @@ impl Window {
         Self {
             inner,
             vsync,
-            mode: Cell::new(mode),
-            exit_requested: Cell::new(false),
+            mode: AtomicU8::new(mode.to_u8()),
+            exit_requested: AtomicBool::new(false),
         }
     }
 
@@ -169,7 +189,7 @@ impl Window {
     }
 
     pub fn mode(&self) -> WindowMode {
-        self.mode.get()
+        WindowMode::from_u8(self.mode.load(Ordering::Relaxed))
     }
 
     /// Sets the window title.
@@ -208,7 +228,7 @@ impl Window {
             }
         };
         self.inner.set_fullscreen(fullscreen);
-        self.mode.set(mode);
+        self.mode.store(mode.to_u8(), Ordering::Relaxed);
         Ok(())
     }
 
@@ -228,13 +248,13 @@ impl Window {
     /// fires exactly once before [`EventLoop::run`](crate::EventLoop::run)
     /// returns. Idempotent: repeated calls are equivalent to one.
     pub fn request_exit(&self) {
-        self.exit_requested.set(true);
+        self.exit_requested.store(true, Ordering::Relaxed);
     }
 
     /// Whether [`request_exit`](Window::request_exit) has been called; checked by
     /// the run loop once per iteration to decide whether to exit.
     pub(crate) fn exit_requested(&self) -> bool {
-        self.exit_requested.get()
+        self.exit_requested.load(Ordering::Relaxed)
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {
@@ -326,6 +346,25 @@ mod tests {
     fn mode_and_grab_defaults() {
         assert_eq!(WindowMode::default(), WindowMode::Windowed);
         assert_eq!(CursorGrab::default(), CursorGrab::None);
+    }
+
+    #[test]
+    fn window_mode_u8_roundtrips() {
+        for mode in [
+            WindowMode::Windowed,
+            WindowMode::BorderlessFullscreen,
+            WindowMode::ExclusiveFullscreen,
+        ] {
+            assert_eq!(WindowMode::from_u8(mode.to_u8()), mode);
+        }
+    }
+
+    #[test]
+    fn window_is_send_and_sync() {
+        // The whole point of the atomic interior state: `Window` must be
+        // shareable as `Arc<Window>` for spawn-render's owned surface.
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Window>();
     }
 
     #[test]

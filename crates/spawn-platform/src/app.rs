@@ -8,6 +8,7 @@
 //! after the last.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 use std::time::Duration;
 
 use winit::application::ApplicationHandler;
@@ -23,14 +24,18 @@ use crate::window::{Window, WindowConfig, WindowMode};
 
 /// Application callbacks driven by the platform run loop.
 ///
-/// All methods borrow the window; the app cannot move or store it, as its
-/// lifetime is bound to the loop. spawn-platform does not auto-close on
+/// `init` receives an owning `Arc<Window>` the app may keep; the other callbacks
+/// borrow the window and cannot store it. spawn-platform does not auto-close on
 /// `CloseRequested` — the app decides whether to exit by calling
 /// [`Window::request_exit`](crate::Window::request_exit) from any callback; the
 /// loop then exits after the current iteration and fires [`exit`](PlatformApp::exit) once.
 pub trait PlatformApp {
     /// Called once after the window is created and before the first event.
-    fn init(&mut self, window: &Window);
+    ///
+    /// Receives the window as an `Arc<Window>` (not a borrow) so the app can keep
+    /// it alive past the callback — e.g. to hand it to spawn-render as a
+    /// surface-owning handle. The subsequent callbacks borrow the window instead.
+    fn init(&mut self, window: Arc<Window>);
 
     /// Called for every translated platform event.
     fn event(&mut self, window: &Window, event: &PlatformEvent);
@@ -154,7 +159,7 @@ impl EventLoop {
 struct Handler<A: PlatformApp> {
     config: WindowConfig,
     app: A,
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
     init_done: bool,
     redraw_pending: bool,
     /// Events translated during the current event batch, drained once per loop
@@ -236,7 +241,7 @@ impl<A: PlatformApp> Handler<A> {
     /// → `event` (per event) → `update` → `redraw_requested` (only when
     /// pending). Drains `pending_events` while retaining its capacity.
     fn drive_iteration(&mut self) {
-        let Some(window) = self.window.take() else {
+        let Some(window) = self.window.clone() else {
             return;
         };
         let mut events = std::mem::take(&mut self.pending_events);
@@ -249,7 +254,6 @@ impl<A: PlatformApp> Handler<A> {
             self.app.redraw_requested(&window);
         }
         self.pending_events = events;
-        self.window = Some(window);
     }
 }
 
@@ -262,8 +266,10 @@ impl<A: PlatformApp> ApplicationHandler<()> for Handler<A> {
             Ok(window) => {
                 // `init` fires once at window creation, before the first event
                 // (§3.2). `exit` is gated on this flag so an early-exiting loop
-                // never calls `exit` without a preceding `init`.
-                self.app.init(&window);
+                // never calls `exit` without a preceding `init`. The window is
+                // shared as an `Arc` so the app may keep it past `init`.
+                let window = Arc::new(window);
+                self.app.init(Arc::clone(&window));
                 self.init_done = true;
                 self.window = Some(window);
             }
@@ -319,7 +325,7 @@ mod tests {
     struct DefaultsOnlyApp;
 
     impl PlatformApp for DefaultsOnlyApp {
-        fn init(&mut self, _window: &Window) {}
+        fn init(&mut self, _window: Arc<Window>) {}
         fn event(&mut self, _window: &Window, _event: &PlatformEvent) {}
     }
 
@@ -330,7 +336,7 @@ mod tests {
     }
 
     impl PlatformApp for CountingApp {
-        fn init(&mut self, _window: &Window) {
+        fn init(&mut self, _window: Arc<Window>) {
             self.inits += 1;
         }
 
@@ -488,7 +494,7 @@ mod tests {
     struct ExitOnInitApp;
 
     impl PlatformApp for ExitOnInitApp {
-        fn init(&mut self, window: &Window) {
+        fn init(&mut self, window: Arc<Window>) {
             window.request_exit();
         }
         fn event(&mut self, _window: &Window, _event: &PlatformEvent) {}
