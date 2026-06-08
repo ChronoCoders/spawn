@@ -240,10 +240,22 @@ impl Schedule {
     /// joins) and is returned; that stage's pending command buffers are discarded
     /// and the event swap is skipped for that frame.
     pub fn run(&mut self, world: &mut World) -> EcsResult<()> {
+        self.run_stages(world)?;
+        world.update_events();
+        Ok(())
+    }
+
+    /// Runs every stage in order *without* swapping event buffers. Used when one
+    /// frame runs more than one schedule (e.g. an engine's fixed-step and
+    /// variable schedules): the caller runs each with `run_stages` and then calls
+    /// [`World::update_events`](World::update_events) exactly once per frame, so
+    /// events are not swapped multiple times within a frame. Same per-stage
+    /// command-application, determinism, and allocation guarantees as
+    /// [`run`](Schedule::run); only the once-per-call event swap is omitted.
+    pub fn run_stages(&mut self, world: &mut World) -> EcsResult<()> {
         for stage in &mut self.stages {
             stage.run(world)?;
         }
-        world.update_events();
         Ok(())
     }
 }
@@ -330,6 +342,47 @@ mod tests {
             stage.batch_count(),
             1,
             "two event readers of the same type must share a batch"
+        );
+    }
+
+    #[test]
+    fn run_stages_does_not_swap_events_but_run_does() {
+        use crate::events::{EventWriter, Events};
+        // One writer of Ev; each schedule pass sends exactly one event.
+        let build = || {
+            let mut world = World::new();
+            world.init_event::<Ev>();
+            let mut schedule = Schedule::new();
+            let mut stage = Stage::new("emit");
+            stage.add_system(|mut w: EventWriter<'_, Ev>, _c: &mut Commands<'_>| {
+                w.send(Ev);
+                Ok(())
+            });
+            schedule.add_stage(stage);
+            schedule.build(&world).unwrap();
+            (world, schedule)
+        };
+
+        // run_stages never swaps: three passes accumulate three events.
+        let (mut world, mut schedule) = build();
+        schedule.run_stages(&mut world).unwrap();
+        schedule.run_stages(&mut world).unwrap();
+        schedule.run_stages(&mut world).unwrap();
+        assert_eq!(
+            world.get_resource::<Events<Ev>>().unwrap().len(),
+            3,
+            "run_stages must not swap event buffers"
+        );
+
+        // run swaps once per call: events never accumulate past the two-frame
+        // window, so three passes leave at most two retained.
+        let (mut world, mut schedule) = build();
+        schedule.run(&mut world).unwrap();
+        schedule.run(&mut world).unwrap();
+        schedule.run(&mut world).unwrap();
+        assert!(
+            world.get_resource::<Events<Ev>>().unwrap().len() <= 2,
+            "run must swap event buffers once per call"
         );
     }
 }
