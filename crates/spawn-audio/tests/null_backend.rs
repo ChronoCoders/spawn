@@ -1,5 +1,7 @@
-//! NullBackend lifecycle and state-machine tests. These run on the headless
-//! host (no audio device), exercising the documented silent fallback.
+//! Engine lifecycle and state-machine tests. The observable state machine is
+//! identical under either backend (DESIGN.md "State parity under Null"), so
+//! these run on any host: `Null` on a headless host (no audio device) and
+//! `Device` on a host with audio output.
 
 use spawn_audio::{
     AudioConfig, AudioEngine, BackendKind, BusId, BusSpec, PlaybackParams, VoiceState,
@@ -15,10 +17,12 @@ fn null_engine() -> AudioEngine {
         ..Default::default()
     })
     .expect("engine constructs");
-    assert_eq!(
-        engine.backend_kind(),
-        BackendKind::Null,
-        "headless host must fall back to NullBackend"
+    assert!(
+        matches!(
+            engine.backend_kind(),
+            BackendKind::Device | BackendKind::Null
+        ),
+        "engine must come up with a usable backend"
     );
     engine
 }

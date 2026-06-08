@@ -620,10 +620,15 @@ mod tests {
     }
 
     #[test]
-    fn new_falls_back_to_null_on_headless() {
+    fn new_comes_up_never_errors() {
         let e = engine();
-        // This host has no audio device; the engine must come up Null, not error.
-        assert_eq!(e.backend_kind(), BackendKind::Null);
+        // `engine()` already proves `new()` did not error. The backend is
+        // `Device` on a host with audio output and `Null` on a headless host
+        // (CI / no device); either way the engine must come up usable.
+        assert!(matches!(
+            e.backend_kind(),
+            BackendKind::Device | BackendKind::Null
+        ));
         assert_eq!(e.active_voice_count(), 0);
     }
 

@@ -73,6 +73,9 @@ fn try_renderer() -> Option<(Renderer<'static>, std::sync::MutexGuard<'static, (
     use winit::application::ApplicationHandler;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::platform::pump_events::EventLoopExtPumpEvents;
+    #[cfg(target_os = "windows")]
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    #[cfg(all(unix, not(target_os = "macos")))]
     use winit::platform::x11::EventLoopBuilderExtX11;
     use winit::window::{Window, WindowId};
 
