@@ -2431,6 +2431,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "spawn-engine"
+version = "0.1.0"
+dependencies = [
+ "spawn-asset",
+ "spawn-audio",
+ "spawn-core",
+ "spawn-ecs",
+ "spawn-input",
+ "spawn-physics",
+ "spawn-platform",
+ "spawn-render",
+]
+
+[[package]]
 name = "spawn-input"
 version = "0.1.0"
 dependencies = [

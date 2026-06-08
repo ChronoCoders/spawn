@@ -1,0 +1,18 @@
+[package]
+name = "spawn-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-ecs = { path = "../spawn-ecs", version = "0.1.0" }
+spawn-platform = { path = "../spawn-platform", version = "0.1.0" }
+spawn-input = { path = "../spawn-input", version = "0.1.0" }
+spawn-render = { path = "../spawn-render", version = "0.1.0" }
+spawn-asset = { path = "../spawn-asset", version = "0.1.0" }
+spawn-audio = { path = "../spawn-audio", version = "0.1.0" }
+spawn-physics = { path = "../spawn-physics", version = "0.1.0" }
+
+[lints]
+workspace = true

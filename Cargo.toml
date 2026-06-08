@@ -15,6 +15,7 @@ members = [
     "crates/spawn-ui",
     "crates/spawn-debug",
     "crates/spawn-build",
+    "crates/spawn-engine",
 ]
 
 [workspace.package]
