@@ -59,6 +59,11 @@ pub enum RenderError {
     GraphDanglingResource {
         resource: &'static str,
     },
+    /// A directional light's shadow frustum is degenerate (non-positive extent,
+    /// zero resolution, `far <= near`, or a zero light direction).
+    ShadowConfigInvalid {
+        context: &'static str,
+    },
 }
 
 impl std::fmt::Display for RenderError {
@@ -99,6 +104,9 @@ impl std::fmt::Display for RenderError {
             }
             Self::GraphDanglingResource { resource } => {
                 write!(f, "render graph transient '{resource}' is written-never-read or read-never-written")
+            }
+            Self::ShadowConfigInvalid { context } => {
+                write!(f, "invalid shadow configuration: {context}")
             }
         }
     }

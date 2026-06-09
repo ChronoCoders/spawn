@@ -66,11 +66,14 @@ pub struct ResourceDesc {
     pub kind: ResourceKind,
 }
 
-/// The pass kind, driving how the pass records. Phase 2b commit (a) has the
-/// retained unlit pass; the shadow and lit kinds arrive with lighting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The pass kind, driving how the pass records. `ForwardOpaque` is the retained
+/// unlit pass; `ShadowDepth` renders depth-only into the shadow map and
+/// `ForwardLit` shades with Lambert + ambient + PCF shadowing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PassKind {
     ForwardOpaque,
+    ShadowDepth,
+    ForwardLit,
 }
 
 /// A color attachment a pass writes.
@@ -276,11 +279,22 @@ impl RenderGraph {
         for t in &plan.transients {
             resource_pool[t.resource.index()] = Some(t.region);
         }
+        // A graph with a shadow pass binds group 2 (light uniform + shadow map +
+        // comparison sampler) once, here at compile/resize — never per frame. The
+        // shadow map is the shadow pass's depth target in the transient pool.
+        let light_bind_group = self
+            .passes
+            .iter()
+            .find(|p| p.kind == PassKind::ShadowDepth)
+            .and_then(|p| p.depth)
+            .and_then(|d| resource_pool.get(d.target.index()).copied().flatten())
+            .map(|region| renderer.create_light_bind_group(&pool[region].view));
         Ok(CompiledGraph {
             order: plan.order.clone(),
             passes: self.passes.clone(),
             pool,
             resource_pool,
+            light_bind_group,
             plan,
             size,
         })
@@ -417,6 +431,7 @@ pub struct CompiledGraph {
     passes: Vec<PassDesc>,
     pool: Vec<PoolTexture>,
     resource_pool: Vec<Option<usize>>,
+    light_bind_group: Option<wgpu::BindGroup>,
     plan: GraphPlan,
     size: SurfaceSize,
 }
@@ -442,6 +457,12 @@ impl CompiledGraph {
 
     pub(crate) fn is_surface(&self, id: ResourceId) -> bool {
         id == SURFACE_ID
+    }
+
+    /// The group-2 light bind group, present when the graph has a shadow pass.
+    /// Built at compile/resize and reused every frame.
+    pub(crate) fn light_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        self.light_bind_group.as_ref()
     }
 
     /// Re-sizes surface-relative transients and re-derives the aliasing plan.
@@ -586,6 +607,54 @@ mod tests {
             plan.transient_memory * 2,
             plan.naive_memory,
             "two equal disjoint transients alias into one region (half the memory)"
+        );
+    }
+
+    #[test]
+    fn shadow_then_lit_derives_shadow_first() {
+        // Declared lit-first; derivation must still order the shadow caster before
+        // the lit pass that reads its shadow map, and size the shadow transient.
+        let mut g = RenderGraph::new();
+        let shadow = g.transient(ResourceDesc {
+            name: "shadow-map",
+            format: TextureFormat::Depth32Float,
+            size: SizeSpec::Fixed {
+                width: 1024,
+                height: 1024,
+            },
+            kind: ResourceKind::Depth,
+        });
+        g.add_pass(PassDesc {
+            name: "lit",
+            kind: PassKind::ForwardLit,
+            reads: vec![shadow],
+            color: Some(ColorWrite {
+                target: g.surface(),
+                clear: Some(Color::BLACK),
+            }),
+            depth: Some(DepthWrite {
+                target: g.primary_depth(),
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        g.add_pass(PassDesc {
+            name: "shadow",
+            kind: PassKind::ShadowDepth,
+            reads: Vec::new(),
+            color: None,
+            depth: Some(DepthWrite {
+                target: shadow,
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        let plan = g.plan(SIZE).unwrap();
+        assert_eq!(plan.order, vec![1, 0], "shadow caster (1) before lit (0)");
+        assert_eq!(
+            plan.transient_memory,
+            u64::from(1024u32 * 1024 * 4),
+            "shadow map sized at its fixed resolution"
         );
     }
 

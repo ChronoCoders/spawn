@@ -12,6 +12,8 @@ use crate::asset_handle::ShaderHandle;
 use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
 use crate::format::{CompareFn, CullMode, DepthFormat, TextureFormat, Topology};
+use crate::graph::PassKind;
+use crate::light::LightUniform;
 use crate::material::MaterialUniform;
 use crate::mesh::Vertex;
 
@@ -36,12 +38,15 @@ pub struct RenderStateKey {
 
 /// Cache identity of a render pipeline. Equal keys ⇒ same cached pipeline.
 /// `shader` identity is the source [`ShaderHandle`]; equal handles reuse the
-/// same compiled module.
+/// same compiled module. `pass` selects the pipeline layout (group set) and
+/// whether a fragment stage runs, so the unlit, lit, and shadow pipelines for one
+/// shader/state are distinct cache entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     pub shader: ShaderHandle,
     pub vertex_layout: VertexLayoutId,
     pub render_state: RenderStateKey,
+    pub pass: PassKind,
 }
 
 /// Compiled WGSL modules keyed by [`ShaderHandle`]. Modules live here for the
@@ -127,13 +132,15 @@ pub(crate) struct ModelUniform {
 
 const _: () = assert!(std::mem::size_of::<ModelUniform>() == 64);
 
-/// Bind-group layouts shared by every Phase 1 pipeline: group 0 = camera
-/// (binding 0, static) + model (binding 1, dynamic offset); group 1 = material
-/// (uniform + texture + sampler). Owned by the renderer so all pipelines and
-/// materials reference identical layouts.
+/// Bind-group layouts shared by every pipeline: group 0 is camera (binding 0,
+/// dynamic offset) and model (binding 1, dynamic offset); group 1 is material
+/// (uniform, texture, sampler); group 2 is light (uniform, shadow depth texture,
+/// comparison sampler), used by the lit pass. Owned by the renderer so all
+/// pipelines and materials reference identical layouts.
 pub struct BindGroupLayouts {
     pub camera: wgpu::BindGroupLayout,
     pub material: wgpu::BindGroupLayout,
+    pub light: wgpu::BindGroupLayout,
 }
 
 impl BindGroupLayouts {
@@ -201,7 +208,44 @@ impl BindGroupLayouts {
                 },
             ],
         });
-        Self { camera, material }
+        let light = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("spawn-light-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<LightUniform>() as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                    count: None,
+                },
+            ],
+        });
+        Self {
+            camera,
+            material,
+            light,
+        }
     }
 }
 
@@ -251,9 +295,18 @@ impl PipelineCache {
                 .get(&key.shader)
                 .ok_or(RenderError::PipelineNotCached(key))?;
 
+            // The group set and fragment stage depend on the pass: shadow is
+            // depth-only (group 0, no fragment, no color target); lit binds the
+            // light group; opaque is unlit. wgpu inserts all barriers — the layout
+            // here only declares the resource interface.
+            let bind_group_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
+                PassKind::ForwardOpaque => &[&layouts.camera, &layouts.material],
+                PassKind::ForwardLit => &[&layouts.camera, &layouts.material, &layouts.light],
+                PassKind::ShadowDepth => &[&layouts.camera],
+            };
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("spawn-pipeline-layout"),
-                bind_group_layouts: &[&layouts.camera, &layouts.material],
+                bind_group_layouts,
                 push_constant_ranges: &[],
             });
 
@@ -265,6 +318,23 @@ impl PipelineCache {
                 bias: wgpu::DepthBiasState::default(),
             };
 
+            let color_targets = [Some(wgpu::ColorTargetState {
+                format: key.render_state.color_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })];
+            // The shadow pass writes depth only — no fragment stage, no color
+            // attachment.
+            let fragment = match key.pass {
+                PassKind::ShadowDepth => None,
+                PassKind::ForwardOpaque | PassKind::ForwardLit => Some(wgpu::FragmentState {
+                    module,
+                    entry_point: "fs_main",
+                    targets: &color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+            };
+
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("spawn-pipeline"),
                 layout: Some(&pipeline_layout),
@@ -274,16 +344,7 @@ impl PipelineCache {
                     buffers: &[Vertex::layout()],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: key.render_state.color_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
+                fragment,
                 primitive: wgpu::PrimitiveState {
                     topology: key.render_state.topology,
                     strip_index_format: None,
@@ -345,6 +406,7 @@ mod tests {
                 cull: CullMode::Back,
                 topology: Topology::TriangleList,
             },
+            pass: PassKind::ForwardOpaque,
         }
     }
 
@@ -366,6 +428,19 @@ mod tests {
     fn differing_fields_distinguish_keys() {
         assert_ne!(key(1, true), key(2, true));
         assert_ne!(key(1, true), key(1, false));
+    }
+
+    #[test]
+    fn pass_discriminator_distinguishes_keys() {
+        // The lit and shadow pipelines for one shader/state must be distinct cache
+        // entries from the unlit one (different layouts / fragment stage).
+        let mut lit = key(1, true);
+        lit.pass = PassKind::ForwardLit;
+        let mut shadow = key(1, true);
+        shadow.pass = PassKind::ShadowDepth;
+        assert_ne!(key(1, true), lit);
+        assert_ne!(key(1, true), shadow);
+        assert_ne!(lit, shadow);
     }
 
     #[test]
@@ -448,6 +523,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 cull: CullMode::Back,
                 topology: Topology::TriangleList,
             },
+            pass: PassKind::ForwardOpaque,
         };
         let mut cache = PipelineCache::new();
         assert!(cache.get_or_create(&device, &layouts, k, &store).is_ok());

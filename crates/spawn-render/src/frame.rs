@@ -1,10 +1,11 @@
 //! Frame lifecycle: surface acquire with loss recovery, pass execution, submit
 //! and present.
 
+use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
 use crate::graph::{CompiledGraph, PassKind};
-use crate::passes::forward_opaque;
 use crate::passes::forward_opaque::RenderScene;
+use crate::passes::{forward_lit, forward_opaque, shadow_depth};
 use crate::renderer::Renderer;
 
 /// Holds the acquired surface texture, its view, and the command encoder for one
@@ -111,39 +112,96 @@ impl FrameContext<'_, '_> {
         self.renderer
             .ensure_camera_capacity(graph.order().len() as u32);
         let camera_stride = self.renderer.camera_stride();
-        let camera_uniform = scene.camera.uniform();
+        let scene_camera = scene.camera.uniform();
+
+        // Lighting is shared across the shadow and lit passes: the shadow pass
+        // renders from the light's view-projection, the lit pass projects
+        // fragments into that same clip space. Compute both once; upload the light
+        // block once.
+        let shadow_camera: Option<CameraUniform> = match scene.lighting {
+            Some(lighting) => {
+                let cam = lighting.directional.shadow_camera()?;
+                self.renderer
+                    .write_light(&lighting.directional.light_uniform(cam.view_projection()));
+                Some(cam.uniform())
+            }
+            None => None,
+        };
+
         let encoder = self.encoder.as_mut().ok_or(RenderError::InvalidArgument {
             context: "frame encoder already consumed",
         })?;
         for (slot, &pass_idx) in graph.order().iter().enumerate() {
             let pass = graph.pass(pass_idx);
-            self.renderer
-                .write_camera_slot(slot as u32, &camera_uniform);
             let camera_offset = (slot as u64 * camera_stride) as u32;
-            let color = pass.color.ok_or(RenderError::InvalidArgument {
-                context: "forward-opaque pass needs a color target",
-            })?;
-            let color_view: &wgpu::TextureView = if graph.is_surface(color.target) {
-                &self.color_view
-            } else {
-                graph
-                    .transient_view(color.target)
-                    .ok_or(RenderError::InvalidArgument {
-                        context: "color target is neither the surface nor a known transient",
-                    })?
-            };
-            let clear_depth = pass.depth.and_then(|d| d.clear);
             match pass.kind {
-                PassKind::ForwardOpaque => {
-                    forward_opaque::record(
+                PassKind::ShadowDepth => {
+                    let camera = shadow_camera.ok_or(RenderError::InvalidArgument {
+                        context: "shadow pass requires scene lighting",
+                    })?;
+                    self.renderer.write_camera_slot(slot as u32, &camera);
+                    let depth = pass.depth.ok_or(RenderError::InvalidArgument {
+                        context: "shadow pass needs a depth target",
+                    })?;
+                    let depth_view =
+                        graph
+                            .transient_view(depth.target)
+                            .ok_or(RenderError::InvalidArgument {
+                                context: "shadow depth target is not a known transient",
+                            })?;
+                    shadow_depth::record(
                         self.renderer,
                         encoder,
-                        color_view,
-                        color.clear,
-                        clear_depth,
+                        depth_view,
+                        depth.clear,
                         camera_offset,
                         scene,
                     )?;
+                }
+                PassKind::ForwardOpaque | PassKind::ForwardLit => {
+                    self.renderer.write_camera_slot(slot as u32, &scene_camera);
+                    let color = pass.color.ok_or(RenderError::InvalidArgument {
+                        context: "forward pass needs a color target",
+                    })?;
+                    let color_view: &wgpu::TextureView = if graph.is_surface(color.target) {
+                        &self.color_view
+                    } else {
+                        graph
+                            .transient_view(color.target)
+                            .ok_or(RenderError::InvalidArgument {
+                                context:
+                                    "color target is neither the surface nor a known transient",
+                            })?
+                    };
+                    let clear_depth = pass.depth.and_then(|d| d.clear);
+                    if pass.kind == PassKind::ForwardLit {
+                        let light_bind_group =
+                            graph
+                                .light_bind_group()
+                                .ok_or(RenderError::InvalidArgument {
+                                    context: "lit pass requires a compiled light bind group",
+                                })?;
+                        forward_lit::record(
+                            self.renderer,
+                            encoder,
+                            color_view,
+                            color.clear,
+                            clear_depth,
+                            camera_offset,
+                            light_bind_group,
+                            scene,
+                        )?;
+                    } else {
+                        forward_opaque::record(
+                            self.renderer,
+                            encoder,
+                            color_view,
+                            color.clear,
+                            clear_depth,
+                            camera_offset,
+                            scene,
+                        )?;
+                    }
                 }
             }
         }

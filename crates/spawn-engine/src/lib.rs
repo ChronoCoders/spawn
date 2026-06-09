@@ -27,4 +27,6 @@ pub use render::{
 pub use time::Time;
 
 pub use spawn_platform::WindowConfig;
-pub use spawn_render::{RenderResources, Renderer, SurfaceSize};
+pub use spawn_render::{
+    DirectionalLight, Lighting, RenderResources, Renderer, ShadowConfig, SurfaceSize,
+};

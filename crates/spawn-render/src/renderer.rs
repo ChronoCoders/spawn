@@ -4,12 +4,22 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use spawn_asset::AssetId;
 
 use crate::asset_handle::ShaderHandle;
 use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
-use crate::format::{DepthFormat, PowerPreference, PresentMode, SurfaceSize, TextureFormat};
-use crate::pipeline::{BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, ShaderStore};
+use crate::format::{
+    CompareFn, CullMode, DepthFormat, PowerPreference, PresentMode, SurfaceSize, TextureFormat,
+    Topology,
+};
+use crate::graph::PassKind;
+use crate::light::LightUniform;
+use crate::pipeline::{
+    BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, RenderStateKey, ShaderStore,
+    VertexLayoutId,
+};
+use crate::shaders::{LIT_WGSL, SHADOW_WGSL};
 use crate::texture::{SamplerConfig, Texture};
 
 /// The `raw-window-handle` bound a surface source must satisfy. `Send + Sync` is
@@ -61,6 +71,10 @@ pub struct Renderer<'w> {
     pub(crate) model_buffer: wgpu::Buffer,
     pub(crate) model_stride: u64,
     pub(crate) model_capacity: u32,
+    light_buffer: wgpu::Buffer,
+    shadow_sampler: wgpu::Sampler,
+    lit_pipeline_key: PipelineKey,
+    shadow_pipeline_key: PipelineKey,
     pub(crate) fallback_texture: Texture,
     pub(crate) depth_view: wgpu::TextureView,
     depth_texture: wgpu::Texture,
@@ -255,6 +269,65 @@ impl<'w> Renderer<'w> {
         let camera_bind_group =
             make_camera_bind_group(&device, &layouts.camera, &camera_buffer, &model_buffer);
 
+        // The lit and shadow shaders are engine built-ins, compiled once and their
+        // pipelines built here at construction — never per frame. The lit pass
+        // shades every draw with one pipeline (materials supply group 1); the
+        // shadow pass renders depth-only into the shadow map.
+        let mut shaders = ShaderStore::new();
+        let mut cache = PipelineCache::new();
+        let lit_shader = ShaderHandle::from_id(AssetId::from_raw(BUILTIN_LIT_SHADER_ID));
+        let shadow_shader = ShaderHandle::from_id(AssetId::from_raw(BUILTIN_SHADOW_SHADER_ID));
+        shaders.load(&device, lit_shader, LIT_WGSL)?;
+        shaders.load(&device, shadow_shader, SHADOW_WGSL)?;
+        let lit_pipeline_key = PipelineKey {
+            shader: lit_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ForwardLit,
+        };
+        let shadow_pipeline_key = PipelineKey {
+            shader: shadow_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                // No color target; the color format is part of the cache key only.
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                // Render all caster faces so thin/open geometry still casts.
+                cull: CullMode::None,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ShadowDepth,
+        };
+        cache.get_or_create(&device, &layouts, lit_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, shadow_pipeline_key, &shaders)?;
+
+        let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-light-uniform"),
+            size: std::mem::size_of::<LightUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("spawn-shadow-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+
         let fallback_texture = Texture::build(
             &device,
             &queue,
@@ -268,8 +341,8 @@ impl<'w> Renderer<'w> {
             device,
             queue,
             device_lost,
-            cache: PipelineCache::new(),
-            shaders: ShaderStore::new(),
+            cache,
+            shaders,
             layouts,
             camera_buffer,
             camera_bind_group,
@@ -278,6 +351,10 @@ impl<'w> Renderer<'w> {
             model_buffer,
             model_stride,
             model_capacity,
+            light_buffer,
+            shadow_sampler,
+            lit_pipeline_key,
+            shadow_pipeline_key,
             fallback_texture,
             depth_view,
             depth_texture,
@@ -472,6 +549,52 @@ impl<'w> Renderer<'w> {
     pub(crate) fn model_stride(&self) -> u64 {
         self.model_stride
     }
+
+    /// Uploads the per-frame light block into the renderer-owned light buffer in
+    /// place; no reallocation. The group-2 light bind group references this buffer
+    /// and is unaffected.
+    pub(crate) fn write_light(&self, uniform: &LightUniform) {
+        self.queue
+            .write_buffer(&self.light_buffer, 0, bytemuck::bytes_of(uniform));
+    }
+
+    /// Builds the group-2 light bind group from the renderer-owned light buffer
+    /// and comparison sampler plus `shadow_view` (the compiled shadow map). Called
+    /// at graph compile/resize, never per frame.
+    pub(crate) fn create_light_bind_group(
+        &self,
+        shadow_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spawn-light-bg"),
+            layout: &self.layouts.light,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.light_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                },
+            ],
+        })
+    }
+
+    /// The cache key of the built-in lit pipeline (the lit pass uses it for every
+    /// draw; materials supply group 1).
+    pub(crate) fn lit_pipeline_key(&self) -> PipelineKey {
+        self.lit_pipeline_key
+    }
+
+    /// The cache key of the built-in depth-only shadow pipeline.
+    pub(crate) fn shadow_pipeline_key(&self) -> PipelineKey {
+        self.shadow_pipeline_key
+    }
 }
 
 impl Renderer<'static> {
@@ -506,6 +629,11 @@ impl Renderer<'static> {
 
 const INITIAL_MODEL_CAPACITY: u32 = 256;
 const INITIAL_CAMERA_CAPACITY: u32 = 8;
+
+// Reserved `AssetId` raw values for the engine's built-in lit and shadow shaders.
+// Picked at the top of the id space so an app's content ids do not collide.
+const BUILTIN_LIT_SHADER_ID: u64 = u64::MAX;
+const BUILTIN_SHADOW_SHADER_ID: u64 = u64::MAX - 1;
 
 fn align_up(value: u64, align: u64) -> u64 {
     if align <= 1 {

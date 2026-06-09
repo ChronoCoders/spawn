@@ -140,6 +140,7 @@ fn zero_net_engine_allocation_per_frame() {
         let draws: [DrawItem; 0] = [];
         let scene = RenderScene {
             camera: &camera,
+            lighting: None,
             draws: &draws,
         };
         let mut frame = renderer.begin_frame().expect("begin");
@@ -196,6 +197,7 @@ fn compiled_graph_executes_and_presents() {
     let draws: [DrawItem; 0] = [];
     let scene = RenderScene {
         camera: &camera,
+        lighting: None,
         draws: &draws,
     };
 
@@ -309,8 +311,8 @@ fn render_resources_resolve_registered_resources() {
 
     use spawn_asset::AssetId;
     use spawn_render::{
-        CompareFn, CullMode, Material, MaterialUniform, Mesh, PipelineKey, RenderResources,
-        RenderStateKey, ShaderHandle, Topology, Vertex, VertexLayoutId,
+        CompareFn, CullMode, Material, MaterialUniform, Mesh, PassKind, PipelineKey,
+        RenderResources, RenderStateKey, ShaderHandle, Topology, Vertex, VertexLayoutId,
     };
 
     let shader = ShaderHandle::from_id(AssetId::from_raw(7));
@@ -329,6 +331,7 @@ fn render_resources_resolve_registered_resources() {
         shader,
         vertex_layout: VertexLayoutId::PositionNormalUv,
         render_state: state,
+        pass: PassKind::ForwardOpaque,
     };
     renderer.build_pipeline(key).expect("pipeline builds");
 
@@ -377,4 +380,128 @@ fn render_resources_resolve_registered_resources() {
             .is_none(),
         "an unregistered id resolves to None"
     );
+}
+
+/// GPU instance required: compiles the lit graph (a depth-only shadow caster
+/// feeding the lit forward pass), then executes it against the surface with one
+/// directional light and one draw. Exercises multi-pass execution, per-pass
+/// camera isolation (light view-proj vs scene camera), and the compiled light
+/// bind group — with no wgpu validation errors.
+#[test]
+fn lit_graph_executes_with_shadow_pass() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_asset::AssetId;
+    use spawn_render::{
+        ColorWrite, CompareFn, CullMode, DepthWrite, Lighting, Material, MaterialUniform, Mesh,
+        PassDesc, PassKind, RenderGraph, RenderScene, RenderStateKey, ResourceDesc, ResourceKind,
+        ShaderHandle, SizeSpec, Topology, Vertex,
+    };
+
+    // The lit pass uses the renderer's built-in lit pipeline; the material only
+    // supplies group 1, so its placeholder shader/state are never looked up.
+    let placeholder = ShaderHandle::from_id(AssetId::from_raw(11));
+    let state = RenderStateKey {
+        color_format: renderer.surface_format(),
+        depth_format: renderer.depth_format(),
+        depth_compare: CompareFn::Less,
+        depth_write: true,
+        cull: CullMode::Back,
+        topology: Topology::TriangleList,
+    };
+    let material = Material::new(
+        &renderer,
+        placeholder,
+        MaterialUniform::default(),
+        None,
+        state,
+    )
+    .expect("material");
+    let n = [0.0, 1.0, 0.0];
+    let verts = [
+        Vertex {
+            position: [-1.0, 0.0, -1.0],
+            normal: n,
+            uv: [0.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0, -1.0],
+            normal: n,
+            uv: [1.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0, 1.0],
+            normal: n,
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            position: [-1.0, 0.0, 1.0],
+            normal: n,
+            uv: [0.0, 1.0],
+        },
+    ];
+    let mesh = Mesh::new(renderer.device(), &verts, &[0, 1, 2, 0, 2, 3]).expect("mesh");
+
+    let mut g = RenderGraph::new();
+    let surface = g.surface();
+    let depth = g.primary_depth();
+    let shadow_map = g.transient(ResourceDesc {
+        name: "shadow-map",
+        format: renderer.depth_format().to_wgpu(),
+        size: SizeSpec::Fixed {
+            width: 1024,
+            height: 1024,
+        },
+        kind: ResourceKind::Depth,
+    });
+    g.add_pass(PassDesc {
+        name: "shadow",
+        kind: PassKind::ShadowDepth,
+        reads: Vec::new(),
+        color: None,
+        depth: Some(DepthWrite {
+            target: shadow_map,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "lit",
+        kind: PassKind::ForwardLit,
+        reads: vec![shadow_map],
+        color: Some(ColorWrite {
+            target: surface,
+            clear: Some(Color::new(0.0, 0.0, 0.0, 1.0)),
+        }),
+        depth: Some(DepthWrite {
+            target: depth,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    let compiled = g.compile(&renderer).expect("compile lit graph");
+    assert!(
+        compiled.transient_memory() > 0,
+        "the shadow map is a real transient"
+    );
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let lighting = Lighting::default();
+    let draws = [DrawItem {
+        mesh: &mesh,
+        material: &material,
+        model: spawn_core::Mat4::IDENTITY,
+    }];
+    let scene = RenderScene {
+        camera: &camera,
+        lighting: Some(&lighting),
+        draws: &draws,
+    };
+
+    let mut frame = renderer.begin_frame().expect("begin");
+    frame.execute(&compiled, &scene).expect("execute lit graph");
+    frame.end_frame().expect("end");
 }

@@ -4,6 +4,7 @@ use wgpu::util::DeviceExt;
 
 use crate::asset_handle::ShaderHandle;
 use crate::error::RenderResult;
+use crate::graph::PassKind;
 use crate::pipeline::{PipelineKey, RenderStateKey, VertexLayoutId};
 use crate::renderer::Renderer;
 use crate::texture::Texture;
@@ -89,6 +90,7 @@ impl Material {
                 shader,
                 vertex_layout: VertexLayoutId::PositionNormalUv,
                 render_state: state,
+                pass: PassKind::ForwardOpaque,
             },
             bind_group,
             uniform_buffer,

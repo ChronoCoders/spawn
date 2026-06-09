@@ -15,13 +15,17 @@ mod camera;
 mod error;
 mod format;
 mod frame;
+#[cfg(test)]
+mod gpu_test;
 mod graph;
+mod light;
 mod material;
 mod mesh;
 mod passes;
 mod pipeline;
 mod renderer;
 mod resources;
+mod shaders;
 mod texture;
 
 pub use asset_handle::ShaderHandle;
@@ -36,6 +40,7 @@ pub use graph::{
     ColorWrite, CompiledGraph, DepthWrite, PassDesc, PassKind, RenderGraph, ResourceDesc,
     ResourceId, ResourceKind, SizeSpec,
 };
+pub use light::{DirectionalLight, Lighting, ShadowConfig};
 pub use material::{Material, MaterialUniform};
 pub use mesh::{Mesh, Vertex};
 pub use passes::forward_opaque::{DrawItem, RenderScene};

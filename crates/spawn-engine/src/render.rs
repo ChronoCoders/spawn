@@ -13,8 +13,9 @@ use spawn_asset::AssetId;
 use spawn_core::{Color, Mat4};
 use spawn_platform::Window;
 use spawn_render::{
-    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, PassDesc, PassKind, RenderGraph,
-    RenderResources, RenderScene, Renderer, RendererConfig, SurfaceSize,
+    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, Lighting, PassDesc, PassKind,
+    RenderGraph, RenderResources, RenderScene, Renderer, RendererConfig, ResourceDesc,
+    ResourceKind, ShadowConfig, SizeSpec, SurfaceSize,
 };
 
 use crate::error::EngineResult;
@@ -46,20 +47,23 @@ pub struct RenderProxy {
     pub material: AssetId,
 }
 
-/// The full extraction for one frame: the active camera and the draw list. The
-/// `draws` vector is cleared (not freed) each frame and retains capacity, so a
-/// steady draw count is allocation-free.
+/// The full extraction for one frame: the active camera, the scene lighting (one
+/// directional light + shadow), and the draw list. The `draws` vector is cleared
+/// (not freed) each frame and retains capacity, so a steady draw count is
+/// allocation-free.
 #[derive(Default)]
 pub struct RenderProxies {
     pub camera: CameraProxy,
+    pub lighting: Lighting,
     pub draws: Vec<RenderProxy>,
 }
 
 impl RenderProxies {
-    /// Clears the draw list (retaining capacity) and resets the camera, readying
-    /// the buffer for a fresh extraction.
+    /// Clears the draw list (retaining capacity) and resets the camera and
+    /// lighting, readying the buffer for a fresh extraction.
     pub(crate) fn reset(&mut self) {
         self.camera = CameraProxy::default();
+        self.lighting = Lighting::default();
         self.draws.clear();
     }
 }
@@ -160,13 +164,13 @@ impl RenderBackend for HeadlessBackend {
 }
 
 /// The real wgpu backend: owns a surface-owning [`Renderer<'static>`] (built from
-/// the platform window via [`Renderer::from_owned`]) and a validated single
-/// forward-opaque [`RenderGraph`].
+/// the platform window via [`Renderer::from_owned`]) and a compiled lit
+/// [`RenderGraph`] (a depth-only shadow pass feeding a lit forward pass).
 ///
-/// `submit` extracts the camera proxy into a [`Camera`], resolves each draw proxy
-/// to its GPU mesh/material through the [`RenderResources`] registry (skipping
-/// unregistered ids), and runs the frame lifecycle. The registry is populated by
-/// app render-setup hooks at construction.
+/// `submit` extracts the camera proxy into a [`Camera`], threads the lighting
+/// proxy through, resolves each draw proxy to its GPU mesh/material through the
+/// [`RenderResources`] registry (skipping unregistered ids), and runs the frame
+/// lifecycle. The registry is populated by app render-setup hooks at construction.
 pub struct WgpuBackend {
     renderer: Renderer<'static>,
     graph: RenderGraph,
@@ -200,13 +204,39 @@ impl WgpuBackend {
         for setup in setups {
             setup(&mut renderer, &mut resources)?;
         }
+        // The standard engine graph is lit: a depth-only shadow caster writes the
+        // shadow map, then the lit forward pass reads it and shades the surface.
+        // The derived order places the shadow pass first (the lit pass reads its
+        // output). The shadow map is a fixed-size transient in the engine's depth
+        // format so the built-in shadow pipeline and the texture agree.
         let mut graph = RenderGraph::new();
         let surface = graph.surface();
         let depth = graph.primary_depth();
+        let shadow_resolution = ShadowConfig::default().resolution;
+        let shadow_map = graph.transient(ResourceDesc {
+            name: "shadow-map",
+            format: renderer.depth_format().to_wgpu(),
+            size: SizeSpec::Fixed {
+                width: shadow_resolution,
+                height: shadow_resolution,
+            },
+            kind: ResourceKind::Depth,
+        });
         graph.add_pass(PassDesc {
-            name: "forward-opaque",
-            kind: PassKind::ForwardOpaque,
+            name: "shadow-depth",
+            kind: PassKind::ShadowDepth,
             reads: Vec::new(),
+            color: None,
+            depth: Some(DepthWrite {
+                target: shadow_map,
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        graph.add_pass(PassDesc {
+            name: "forward-lit",
+            kind: PassKind::ForwardLit,
+            reads: vec![shadow_map],
             color: Some(ColorWrite {
                 target: surface,
                 clear: Some(clear_color),
@@ -248,6 +278,7 @@ impl RenderBackend for WgpuBackend {
             .collect();
         let scene = RenderScene {
             camera: &camera,
+            lighting: Some(&proxies.lighting),
             draws: &draws,
         };
         let mut frame = self.renderer.begin_frame()?;
