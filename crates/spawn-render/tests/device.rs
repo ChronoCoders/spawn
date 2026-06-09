@@ -16,8 +16,8 @@ use std::sync::Mutex;
 
 use spawn_core::Color;
 use spawn_render::{
-    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, PassDesc, PassKind, RenderGraph,
-    RenderScene, Renderer, RendererConfig, SurfaceSize,
+    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, PassDesc, PassKind, RenderError,
+    RenderGraph, RenderScene, Renderer, RendererConfig, SurfaceSize,
 };
 
 thread_local! {
@@ -194,6 +194,13 @@ fn compiled_graph_executes_and_presents() {
 
     let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
     let g = compiled_graph(&renderer);
+
+    // No transients in this graph: nothing to alias. Graph derivation is
+    // device-independent, so verify it before touching the surface — these hold
+    // even when the host cannot present (headless gate below).
+    assert_eq!(g.transient_memory(), 0);
+    assert_eq!(g.naive_memory(), 0);
+
     let draws: [DrawItem; 0] = [];
     let scene = RenderScene {
         camera: &camera,
@@ -201,13 +208,20 @@ fn compiled_graph_executes_and_presents() {
         draws: &draws,
     };
 
-    let mut frame = renderer.begin_frame().expect("begin");
+    // Acquiring the swapchain can still fail on a host that has an adapter but no
+    // presentable surface (e.g. a virtual X server), which `try_renderer`'s gate
+    // cannot foresee. A surface-acquire failure is the same headless condition the
+    // sibling tests skip on, so skip here too; any other error is a real fault.
+    let mut frame = match renderer.begin_frame() {
+        Ok(frame) => frame,
+        Err(RenderError::Surface | RenderError::SurfaceTimeout) => {
+            eprintln!("device.rs: surface not presentable on this host; skipping (spec §13 gate)");
+            return;
+        }
+        Err(e) => panic!("begin_frame: {e}"),
+    };
     frame.execute(&g, &scene).expect("execute compiled graph");
     frame.end_frame().expect("end");
-
-    // No transients in this graph: nothing to alias.
-    assert_eq!(g.transient_memory(), 0);
-    assert_eq!(g.naive_memory(), 0);
 }
 
 #[test]
