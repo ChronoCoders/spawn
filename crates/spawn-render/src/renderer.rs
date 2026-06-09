@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use wgpu::util::DeviceExt;
 
 use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
@@ -56,6 +55,8 @@ pub struct Renderer<'w> {
     pub(crate) layouts: BindGroupLayouts,
     pub(crate) camera_buffer: wgpu::Buffer,
     pub(crate) camera_bind_group: wgpu::BindGroup,
+    pub(crate) camera_stride: u64,
+    pub(crate) camera_capacity: u32,
     pub(crate) model_buffer: wgpu::Buffer,
     pub(crate) model_stride: u64,
     pub(crate) model_capacity: u32,
@@ -230,20 +231,17 @@ impl<'w> Renderer<'w> {
 
         let layouts = BindGroupLayouts::new(&device);
 
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("spawn-camera-uniform"),
-            contents: bytemuck::bytes_of(&CameraUniform {
-                view_proj: [
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                ],
-                view_pos: [0.0, 0.0, 0.0, 1.0],
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
         let align = device.limits().min_uniform_buffer_offset_alignment as u64;
+        let camera_stride = align_up(std::mem::size_of::<CameraUniform>() as u64, align.max(1));
+        let camera_capacity = INITIAL_CAMERA_CAPACITY;
+        // Dynamic-offset camera buffer: one slot per pass, so a multi-pass graph
+        // (shadow view vs camera view) never clobbers a singleton.
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-camera-uniform"),
+            size: camera_stride * camera_capacity as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let model_stride = align_up(std::mem::size_of::<ModelUniform>() as u64, align.max(1));
         let model_capacity = INITIAL_MODEL_CAPACITY;
         let model_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -274,6 +272,8 @@ impl<'w> Renderer<'w> {
             layouts,
             camera_buffer,
             camera_bind_group,
+            camera_stride,
+            camera_capacity,
             model_buffer,
             model_stride,
             model_capacity,
@@ -377,18 +377,43 @@ impl<'w> Renderer<'w> {
         Ok(())
     }
 
-    /// Uploads `uniform` into the renderer-owned camera buffer in place; no
-    /// reallocation. Called once per frame from the forward pass.
-    ///
-    /// Invariant: the camera and per-draw model buffers are
-    /// singletons submitted once at `end_frame`. A second surface pass in the
-    /// same frame would overwrite this buffer before submission, clobbering the
-    /// first pass. [`crate::graph::RenderGraph::validate`] enforces exactly one
-    /// surface-color pass per frame, so this write happens at most once per
-    /// frame and the clobber cannot occur. Per-pass uniforms are Phase 2.
-    pub(crate) fn write_camera(&self, uniform: &CameraUniform) {
-        self.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(uniform));
+    /// Writes `uniform` into the camera slot for pass `slot` (dynamic-offset
+    /// `slot * camera_stride`) in place; no reallocation. Each pass binds its own
+    /// slot, so multiple passes in one frame never clobber a shared camera buffer.
+    /// Caller guarantees capacity via [`Renderer::ensure_camera_capacity`].
+    pub(crate) fn write_camera_slot(&self, slot: u32, uniform: &CameraUniform) {
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            u64::from(slot) * self.camera_stride,
+            bytemuck::bytes_of(uniform),
+        );
+    }
+
+    /// Ensures the per-pass camera buffer holds at least `count` slots,
+    /// reallocating (and rebuilding the camera bind group) only on growth — never
+    /// in steady state once capacity covers the largest graph's pass count.
+    pub(crate) fn ensure_camera_capacity(&mut self, count: u32) {
+        if count <= self.camera_capacity {
+            return;
+        }
+        let new_capacity = count.next_power_of_two().max(INITIAL_CAMERA_CAPACITY);
+        self.camera_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-camera-uniform"),
+            size: self.camera_stride * new_capacity as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.camera_capacity = new_capacity;
+        self.camera_bind_group = make_camera_bind_group(
+            &self.device,
+            &self.layouts.camera,
+            &self.camera_buffer,
+            &self.model_buffer,
+        );
+    }
+
+    pub(crate) fn camera_stride(&self) -> u64 {
+        self.camera_stride
     }
 
     /// Ensures the per-draw model buffer holds at least `count` entries,
@@ -462,6 +487,7 @@ impl Renderer<'static> {
 }
 
 const INITIAL_MODEL_CAPACITY: u32 = 256;
+const INITIAL_CAMERA_CAPACITY: u32 = 8;
 
 fn align_up(value: u64, align: u64) -> u64 {
     if align <= 1 {
@@ -482,7 +508,11 @@ fn make_camera_bind_group(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: camera_buffer.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: camera_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<CameraUniform>() as u64),
+                }),
             },
             wgpu::BindGroupEntry {
                 binding: 1,

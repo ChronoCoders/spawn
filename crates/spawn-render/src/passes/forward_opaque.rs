@@ -1,10 +1,12 @@
 //! The forward opaque pass: depth-tested (`Less`, write on), unblended draws.
+//! The camera is bound via a per-pass dynamic offset (the graph writes each
+//! pass's view-projection into its own slot), so multi-pass graphs do not clobber
+//! a shared camera buffer.
 
-use spawn_core::Mat4;
+use spawn_core::{Color, Mat4};
 
 use crate::camera::Camera;
-use crate::error::{RenderError, RenderResult};
-use crate::graph::{ColorTarget, RenderPassDesc};
+use crate::error::RenderResult;
 use crate::material::Material;
 use crate::mesh::Mesh;
 use crate::pipeline::ModelUniform;
@@ -35,42 +37,28 @@ fn model_uniform(model: Mat4) -> ModelUniform {
     }
 }
 
-/// Records the opaque pass into `encoder` against `color_view` (the swapchain
-/// surface view).
-///
-/// `color_view` is always the surface view: Phase 1 renders only to the
-/// swapchain, and [`crate::graph::RenderGraph::validate`] rejects any non-surface
-/// `color_target` before a graph can reach the frame loop. As defense in depth
-/// against an unvalidated graph reaching execution, a non-surface
-/// `desc.color_target` returns [`RenderError::InvalidArgument`] here rather than
-/// silently drawing to the surface.
-///
-/// Uploads camera + per-draw model uniforms, then for each draw looks up the
-/// material's pipeline in the cache (never builds here — a miss is
-/// [`crate::error::RenderError::PipelineNotCached`]), binds it (skipping a
-/// redundant rebind of the same pipeline), binds the material group, and issues
-/// one indexed draw. No heap allocation occurs; the model buffer's capacity is
-/// ensured before the pass begins.
+/// Records the opaque pass into `encoder` against `color_view`, with the
+/// renderer's primary depth buffer as the depth attachment. `camera_offset` is
+/// the dynamic offset of this pass's camera slot (written by the graph executor
+/// before this call). Clears are applied per `clear_color`/`clear_depth`
+/// (`None` ⇒ load). Looks up each material's pipeline in the cache — never builds
+/// here; a miss is [`crate::error::RenderError::PipelineNotCached`]. No heap
+/// allocation occurs.
 pub(crate) fn record(
     renderer: &mut Renderer,
     encoder: &mut wgpu::CommandEncoder,
     color_view: &wgpu::TextureView,
-    desc: &RenderPassDesc,
+    clear_color: Option<Color>,
+    clear_depth: Option<f32>,
+    camera_offset: u32,
     scene: &RenderScene,
 ) -> RenderResult<()> {
-    if !matches!(desc.color_target, ColorTarget::SurfaceColor) {
-        return Err(RenderError::InvalidArgument {
-            context: "forward pass color target must be the surface in Phase 1",
-        });
-    }
-
-    renderer.write_camera(&scene.camera.uniform());
     renderer.ensure_model_capacity(scene.draws.len() as u32);
     for (i, draw) in scene.draws.iter().enumerate() {
         renderer.write_model(i as u32, &model_uniform(draw.model));
     }
 
-    let color_load = match desc.clear_color {
+    let color_load = match clear_color {
         Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
             r: c.r as f64,
             g: c.g as f64,
@@ -79,7 +67,7 @@ pub(crate) fn record(
         }),
         None => wgpu::LoadOp::Load,
     };
-    let depth_load = match desc.clear_depth {
+    let depth_load = match clear_depth {
         Some(d) => wgpu::LoadOp::Clear(d),
         None => wgpu::LoadOp::Load,
     };
@@ -92,7 +80,7 @@ pub(crate) fn record(
     let mut last_pipeline = None;
 
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(desc.name),
+        label: Some("spawn-forward-opaque"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: color_view,
             resolve_target: None,
@@ -121,7 +109,7 @@ pub(crate) fn record(
             last_pipeline = Some(key);
         }
         let model_offset = (i as u64 * model_stride) as u32;
-        pass.set_bind_group(0, camera_bind_group, &[model_offset]);
+        pass.set_bind_group(0, camera_bind_group, &[camera_offset, model_offset]);
         pass.set_bind_group(1, draw.material.bind_group(), &[]);
         pass.set_vertex_buffer(0, draw.mesh.vertex_buffer().slice(..));
         pass.set_index_buffer(

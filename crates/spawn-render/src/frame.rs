@@ -2,7 +2,7 @@
 //! and present.
 
 use crate::error::{RenderError, RenderResult};
-use crate::graph::{PassKind, RenderGraph};
+use crate::graph::{CompiledGraph, PassKind};
 use crate::passes::forward_opaque;
 use crate::passes::forward_opaque::RenderScene;
 use crate::renderer::Renderer;
@@ -102,26 +102,48 @@ impl<'w> Renderer<'w> {
 }
 
 impl FrameContext<'_, '_> {
-    /// Records every pass of the `graph` against `scene`. The graph must have
-    /// passed [`RenderGraph::validate`] with no intervening mutation: `execute`
-    /// returns [`RenderError::InvalidArgument`] before recording anything if it
-    /// has not — recording an unvalidated graph could clobber the singleton
-    /// camera/model uniforms or silently no-op an empty graph.
-    /// Phase 1 records each [`PassKind::ForwardOpaque`] pass via the forward
-    /// pass. No heap allocation occurs in this path.
-    pub fn execute(&mut self, graph: &RenderGraph, scene: &RenderScene) -> RenderResult<()> {
-        if !graph.is_validated() {
-            return Err(RenderError::InvalidArgument {
-                context: "render graph not validated before execute (call RenderGraph::validate)",
-            });
-        }
+    /// Records every pass of the compiled `graph` in derived execution order
+    /// against `scene`. Each pass's camera view-projection is written into its own
+    /// dynamic-offset slot (no clobber across passes). Color targets resolve to
+    /// the live surface or a compiled transient; the primary depth buffer is the
+    /// renderer's. No heap allocation occurs in this path.
+    pub fn execute(&mut self, graph: &CompiledGraph, scene: &RenderScene) -> RenderResult<()> {
+        self.renderer
+            .ensure_camera_capacity(graph.order().len() as u32);
+        let camera_stride = self.renderer.camera_stride();
+        let camera_uniform = scene.camera.uniform();
         let encoder = self.encoder.as_mut().ok_or(RenderError::InvalidArgument {
             context: "frame encoder already consumed",
         })?;
-        for pass in graph.passes() {
+        for (slot, &pass_idx) in graph.order().iter().enumerate() {
+            let pass = graph.pass(pass_idx);
+            self.renderer
+                .write_camera_slot(slot as u32, &camera_uniform);
+            let camera_offset = (slot as u64 * camera_stride) as u32;
+            let color = pass.color.ok_or(RenderError::InvalidArgument {
+                context: "forward-opaque pass needs a color target",
+            })?;
+            let color_view: &wgpu::TextureView = if graph.is_surface(color.target) {
+                &self.color_view
+            } else {
+                graph
+                    .transient_view(color.target)
+                    .ok_or(RenderError::InvalidArgument {
+                        context: "color target is neither the surface nor a known transient",
+                    })?
+            };
+            let clear_depth = pass.depth.and_then(|d| d.clear);
             match pass.kind {
                 PassKind::ForwardOpaque => {
-                    forward_opaque::record(self.renderer, encoder, &self.color_view, pass, scene)?;
+                    forward_opaque::record(
+                        self.renderer,
+                        encoder,
+                        color_view,
+                        color.clear,
+                        clear_depth,
+                        camera_offset,
+                        scene,
+                    )?;
                 }
             }
         }

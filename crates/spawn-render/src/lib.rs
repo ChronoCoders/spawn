@@ -31,7 +31,10 @@ pub use format::{
     SurfaceSize, TextureFormat, Topology,
 };
 pub use frame::FrameContext;
-pub use graph::{ColorTarget, DepthTarget, PassKind, RenderGraph, RenderPassDesc, ResourceRef};
+pub use graph::{
+    ColorWrite, CompiledGraph, DepthWrite, PassDesc, PassKind, RenderGraph, ResourceDesc,
+    ResourceId, ResourceKind, SizeSpec,
+};
 pub use material::{Material, MaterialUniform};
 pub use mesh::{Mesh, Vertex};
 pub use passes::forward_opaque::{DrawItem, RenderScene};

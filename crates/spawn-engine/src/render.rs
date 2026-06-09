@@ -13,8 +13,8 @@ use spawn_asset::AssetId;
 use spawn_core::{Color, Mat4};
 use spawn_platform::Window;
 use spawn_render::{
-    Camera, ColorTarget, DepthTarget, PassKind, RenderGraph, RenderPassDesc, RenderScene, Renderer,
-    RendererConfig, SurfaceSize,
+    Camera, ColorWrite, CompiledGraph, DepthWrite, PassDesc, PassKind, RenderGraph, RenderScene,
+    Renderer, RendererConfig, SurfaceSize,
 };
 
 use crate::error::EngineResult;
@@ -171,11 +171,13 @@ impl RenderBackend for HeadlessBackend {
 pub struct WgpuBackend {
     renderer: Renderer<'static>,
     graph: RenderGraph,
+    compiled: CompiledGraph,
 }
 
 impl WgpuBackend {
     /// Builds the backend from an owned window handle and an initial surface
-    /// size, with `clear_color` as the per-frame surface clear.
+    /// size, with `clear_color` as the per-frame surface clear. Compiles a single
+    /// forward-opaque pass targeting the surface.
     pub fn new(
         window: Arc<Window>,
         size: SurfaceSize,
@@ -184,18 +186,28 @@ impl WgpuBackend {
     ) -> EngineResult<Self> {
         let renderer = Renderer::from_owned(window, size, config)?;
         let mut graph = RenderGraph::new();
-        graph.add_pass(RenderPassDesc {
+        let surface = graph.surface();
+        let depth = graph.primary_depth();
+        graph.add_pass(PassDesc {
             name: "forward-opaque",
             kind: PassKind::ForwardOpaque,
-            color_target: ColorTarget::SurfaceColor,
-            depth_target: Some(DepthTarget::Default),
-            clear_color: Some(clear_color),
-            clear_depth: Some(1.0),
-            inputs: Vec::new(),
-            outputs: Vec::new(),
+            reads: Vec::new(),
+            color: Some(ColorWrite {
+                target: surface,
+                clear: Some(clear_color),
+            }),
+            depth: Some(DepthWrite {
+                target: depth,
+                clear: Some(1.0),
+                write: true,
+            }),
         });
-        graph.validate()?;
-        Ok(Self { renderer, graph })
+        let compiled = graph.compile(&renderer)?;
+        Ok(Self {
+            renderer,
+            graph,
+            compiled,
+        })
     }
 }
 
@@ -207,13 +219,14 @@ impl RenderBackend for WgpuBackend {
             draws: &[],
         };
         let mut frame = self.renderer.begin_frame()?;
-        frame.execute(&self.graph, &scene)?;
+        frame.execute(&self.compiled, &scene)?;
         frame.end_frame()?;
         Ok(())
     }
 
     fn resize(&mut self, size: SurfaceSize) -> EngineResult<()> {
         self.renderer.resize(size)?;
+        self.compiled.resize(&self.graph, &self.renderer)?;
         Ok(())
     }
 }

@@ -146,7 +146,8 @@ impl BindGroupLayouts {
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
+                        // Per-pass camera slot via dynamic offset (multi-pass graphs).
+                        has_dynamic_offset: true,
                         min_binding_size: wgpu::BufferSize::new(
                             std::mem::size_of::<CameraUniform>() as u64,
                         ),

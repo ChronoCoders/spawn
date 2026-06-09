@@ -49,6 +49,16 @@ pub enum RenderError {
         context: &'static str,
     },
     Asset(AssetError),
+    /// The derived render-graph dependency graph contains a cycle.
+    GraphCycle,
+    /// A pass reads a resource produced by no earlier pass.
+    GraphResourceNotProduced {
+        resource: &'static str,
+    },
+    /// A transient resource is written but never read, or read but never written.
+    GraphDanglingResource {
+        resource: &'static str,
+    },
 }
 
 impl std::fmt::Display for RenderError {
@@ -80,6 +90,16 @@ impl std::fmt::Display for RenderError {
             }
             Self::InvalidArgument { context } => write!(f, "invalid argument: {context}"),
             Self::Asset(err) => write!(f, "asset error: {err}"),
+            Self::GraphCycle => write!(f, "render graph has a dependency cycle"),
+            Self::GraphResourceNotProduced { resource } => {
+                write!(
+                    f,
+                    "render graph resource '{resource}' is read but not produced"
+                )
+            }
+            Self::GraphDanglingResource { resource } => {
+                write!(f, "render graph transient '{resource}' is written-never-read or read-never-written")
+            }
         }
     }
 }
