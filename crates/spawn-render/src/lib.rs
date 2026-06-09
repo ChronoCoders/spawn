@@ -26,6 +26,7 @@ mod pipeline;
 mod renderer;
 mod resources;
 mod shaders;
+mod text;
 mod texture;
 
 pub use asset_handle::ShaderHandle;
@@ -49,4 +50,5 @@ pub use pipeline::{
 };
 pub use renderer::{HasWindowHandleSet, Renderer, RendererConfig};
 pub use resources::RenderResources;
+pub use text::{Font, Glyph};
 pub use texture::{SamplerConfig, Texture};
