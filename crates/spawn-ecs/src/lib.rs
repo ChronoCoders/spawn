@@ -18,6 +18,7 @@ pub mod entity;
 pub mod error;
 pub mod events;
 pub mod query;
+pub mod reflect;
 pub mod resource;
 pub mod schedule;
 pub mod system;
@@ -32,6 +33,9 @@ pub use error::{EcsError, EcsResult};
 pub use events::{Event, EventReader, EventWriter, Events};
 pub use query::filter::{QueryFilter, With, Without};
 pub use query::{Query, QueryData, QueryIter, QueryIterMut};
+pub use reflect::{
+    FieldDesc, FieldKind, FieldValue, Reflect, ReflectError, ReflectResult, ReflectedComponent,
+};
 pub use resource::{Res, ResMut, Resource, ResourceId};
 pub use schedule::{Schedule, Stage};
 pub use system::{Access, ComponentMask, IntoSystem, System, SystemParam};

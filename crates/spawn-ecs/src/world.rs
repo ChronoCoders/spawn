@@ -15,12 +15,14 @@ use crate::entity::{Entity, EntityAllocator};
 use crate::error::{EcsError, EcsResult};
 use crate::events::Event;
 use crate::query::{Query, QueryData};
+use crate::reflect::{FieldValue, Reflect, ReflectRegistry, ReflectResult, ReflectedComponent};
 use crate::resource::{Res, ResMut, Resource, ResourceId, Resources};
 
 /// Container of all entities, components, and archetype storage.
 pub struct World {
     allocator: EntityAllocator,
     registry: ComponentRegistry,
+    reflect: ReflectRegistry,
     archetypes: ArchetypeStore,
     command_buffer: CommandBuffer,
     resources: Resources,
@@ -39,6 +41,7 @@ impl World {
         Self {
             allocator: EntityAllocator::new(),
             registry: ComponentRegistry::new(),
+            reflect: ReflectRegistry::new(),
             archetypes: ArchetypeStore::new(),
             command_buffer: CommandBuffer::new(),
             resources: Resources::new(),
@@ -63,6 +66,56 @@ impl World {
     /// Returns `T`'s id, or `None` if `T` was never registered.
     pub fn component_id<T: Component>(&self) -> Option<ComponentId> {
         self.registry.component_id::<T>()
+    }
+
+    /// Registers `T` as a component (idempotent, like [`register`](World::register))
+    /// and records its reflection vtable, so the inspector can enumerate and
+    /// read/write its leaf fields by name. Safe to call repeatedly.
+    pub fn register_reflect<T: Reflect>(&mut self) -> ComponentId {
+        let id = self.registry.register::<T>();
+        self.reflect.insert::<T>(id);
+        id
+    }
+
+    /// Whether `component` has a reflection vtable.
+    pub fn is_reflected(&self, component: ComponentId) -> bool {
+        self.reflect.is_reflected(component)
+    }
+
+    /// The reflected components present on `entity`, in [`ComponentId`] order.
+    /// Empty if the entity is dead or has none. Cold path (selection-change), so
+    /// this allocates a `Vec`; the per-field accessors below do not.
+    pub fn reflected_components(&self, entity: Entity) -> Vec<ReflectedComponent> {
+        if !self.contains(entity) {
+            return Vec::new();
+        }
+        self.reflect.present_on(self, entity)
+    }
+
+    /// Reads a reflected leaf. `None` if the entity is dead, lacks the component,
+    /// the component is not reflected, or `field` is unknown. Allocation-free.
+    pub fn reflect_get_field(
+        &self,
+        entity: Entity,
+        component: ComponentId,
+        field: &str,
+    ) -> Option<FieldValue> {
+        self.reflect.get_field(self, entity, component, field)
+    }
+
+    /// Writes a reflected leaf through the normal mutation path.
+    /// `ComponentNotReflected` if `component` was never `register_reflect`-ed;
+    /// `MissingComponent` if the entity is dead or lacks it; `UnknownField` /
+    /// `TypeMismatch` per [`Reflect::reflect_set`]. Allocation-free.
+    pub fn reflect_set_field(
+        &mut self,
+        entity: Entity,
+        component: ComponentId,
+        field: &str,
+        value: FieldValue,
+    ) -> ReflectResult<()> {
+        let set = self.reflect.set_fn(component)?;
+        set(self, entity, field, value)
     }
 
     pub fn spawn(&mut self) -> Entity {
