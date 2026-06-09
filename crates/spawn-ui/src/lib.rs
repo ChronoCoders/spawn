@@ -16,6 +16,7 @@ pub mod input;
 pub mod layout;
 pub mod style;
 pub mod tree;
+pub mod widgets;
 
 pub use draw::{DrawCommand, DrawList, FontId, TextureId, UiImage};
 pub use error::{UiError, UiResult};
@@ -25,3 +26,4 @@ pub use style::{
     AlignItems, Border, Dimension, Display, Edges, FlexDirection, JustifyContent, Size, Style,
 };
 pub use tree::{NodeId, UiTree};
+pub use widgets::{Button, Checkbox, DragValue, Label, Panel};
