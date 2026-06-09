@@ -280,6 +280,7 @@ impl RenderBackend for WgpuBackend {
             camera: &camera,
             lighting: Some(&proxies.lighting),
             draws: &draws,
+            overlay: None,
         };
         let mut frame = self.renderer.begin_frame()?;
         frame.execute(&self.compiled, &scene)?;

@@ -5,7 +5,7 @@ use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
 use crate::graph::{CompiledGraph, PassKind};
 use crate::passes::forward_opaque::RenderScene;
-use crate::passes::{forward_lit, forward_opaque, shadow_depth};
+use crate::passes::{forward_lit, forward_opaque, overlay, shadow_depth};
 use crate::renderer::Renderer;
 
 /// Holds the acquired surface texture, its view, and the command encoder for one
@@ -202,6 +202,28 @@ impl FrameContext<'_, '_> {
                             scene,
                         )?;
                     }
+                }
+                PassKind::Overlay2D => {
+                    // The overlay projects world-space lines with the scene
+                    // camera; UI quads are already in clip space.
+                    self.renderer.write_camera_slot(slot as u32, &scene_camera);
+                    let color = pass.color.ok_or(RenderError::InvalidArgument {
+                        context: "overlay pass needs a color target",
+                    })?;
+                    let color_view: &wgpu::TextureView = if graph.is_surface(color.target) {
+                        &self.color_view
+                    } else {
+                        graph
+                            .transient_view(color.target)
+                            .ok_or(RenderError::InvalidArgument {
+                                context:
+                                    "color target is neither the surface nor a known transient",
+                            })?
+                    };
+                    let data = scene.overlay.as_ref().ok_or(RenderError::InvalidArgument {
+                        context: "overlay pass requires scene overlay data",
+                    })?;
+                    overlay::record(self.renderer, encoder, color_view, data, camera_offset)?;
                 }
             }
         }

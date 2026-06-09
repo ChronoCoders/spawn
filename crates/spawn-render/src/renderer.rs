@@ -15,6 +15,7 @@ use crate::format::{
 };
 use crate::graph::PassKind;
 use crate::light::LightUniform;
+use crate::passes::overlay::{make_texture_bind_group, OverlayState};
 use crate::pipeline::{
     BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, RenderStateKey, ShaderStore,
     VertexLayoutId,
@@ -75,6 +76,7 @@ pub struct Renderer<'w> {
     shadow_sampler: wgpu::Sampler,
     lit_pipeline_key: PipelineKey,
     shadow_pipeline_key: PipelineKey,
+    pub(crate) overlay: OverlayState,
     pub(crate) fallback_texture: Texture,
     pub(crate) depth_view: wgpu::TextureView,
     depth_texture: wgpu::Texture,
@@ -337,6 +339,18 @@ impl<'w> Renderer<'w> {
             SamplerConfig::default(),
         )?;
 
+        // Overlay pipelines (UI quad + line) and reused geometry buffers, built
+        // once here. The 1×1 white fallback texture backs solid rects/borders.
+        let overlay = OverlayState::new(
+            &device,
+            &layouts,
+            &mut cache,
+            &mut shaders,
+            surface_format,
+            config.depth_format,
+            &fallback_texture,
+        )?;
+
         Ok(Self {
             device,
             queue,
@@ -355,6 +369,7 @@ impl<'w> Renderer<'w> {
             shadow_sampler,
             lit_pipeline_key,
             shadow_pipeline_key,
+            overlay,
             fallback_texture,
             depth_view,
             depth_texture,
@@ -594,6 +609,13 @@ impl<'w> Renderer<'w> {
     /// The cache key of the built-in depth-only shadow pipeline.
     pub(crate) fn shadow_pipeline_key(&self) -> PipelineKey {
         self.shadow_pipeline_key
+    }
+
+    /// Builds an overlay UI texture bind group (group 0 of the UI pipeline) for
+    /// `texture`. Used by [`FontRegistry`](crate::passes::overlay::FontRegistry)
+    /// to bind a font atlas; built at registration, never per frame.
+    pub(crate) fn create_overlay_texture_bind_group(&self, texture: &Texture) -> wgpu::BindGroup {
+        make_texture_bind_group(&self.device, &self.layouts.overlay_texture, texture)
     }
 }
 

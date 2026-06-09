@@ -142,6 +142,7 @@ fn zero_net_engine_allocation_per_frame() {
             camera: &camera,
             lighting: None,
             draws: &draws,
+            overlay: None,
         };
         let mut frame = renderer.begin_frame().expect("begin");
         frame.execute(&g, &scene).expect("execute");
@@ -206,6 +207,7 @@ fn compiled_graph_executes_and_presents() {
         camera: &camera,
         lighting: None,
         draws: &draws,
+        overlay: None,
     };
 
     // Acquiring the swapchain can still fail on a host that has an adapter but no
@@ -513,9 +515,121 @@ fn lit_graph_executes_with_shadow_pass() {
         camera: &camera,
         lighting: Some(&lighting),
         draws: &draws,
+        overlay: None,
     };
 
     let mut frame = renderer.begin_frame().expect("begin");
     frame.execute(&compiled, &scene).expect("execute lit graph");
+    frame.end_frame().expect("end");
+}
+
+/// GPU instance required: compiles a base-clear + `Overlay2D` graph and executes
+/// it with a `spawn_ui` draw list (a background panel and a text label) plus a
+/// world-space line, exercising the UI quad pipeline, the glyph atlas text path,
+/// and the line pipeline with no wgpu validation errors.
+#[test]
+fn overlay_graph_executes() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_render::{Font, FontRegistry, LineSegment, Overlay};
+    use spawn_ui::{Dimension, FontId, Size, Style, UiTree};
+
+    let px = |w: f32, h: f32| Size {
+        width: Dimension::Px(w),
+        height: Dimension::Px(h),
+    };
+
+    let font = Font::embedded_monospace(&renderer, 8.0).expect("font atlas");
+    let mut fonts = FontRegistry::new();
+    fonts.insert(&renderer, FontId(1), font);
+
+    let mut tree = UiTree::new(Style {
+        background: Color::new(0.1, 0.1, 0.12, 1.0),
+        size: px(SIZE.width as f32, SIZE.height as f32),
+        ..Default::default()
+    });
+    let root = tree.root();
+    let label = tree
+        .create_node(
+            Style {
+                size: px(40.0, 8.0),
+                ..Default::default()
+            },
+            root,
+        )
+        .unwrap();
+    tree.set_text(label, Some("Hi".to_string())).unwrap();
+    tree.set_font(label, FontId(1)).unwrap();
+
+    let mut measure = Font::embedded_monospace(&renderer, 8.0).expect("measure font");
+    tree.compute_layout(
+        spawn_core::Vec2::new(SIZE.width as f32, SIZE.height as f32),
+        &mut measure,
+    )
+    .unwrap();
+    let mut draw_list = spawn_ui::DrawList::default();
+    tree.build_draw_list(&mut draw_list).unwrap();
+
+    let mut g = RenderGraph::new();
+    g.add_pass(PassDesc {
+        name: "base",
+        kind: PassKind::ForwardOpaque,
+        reads: Vec::new(),
+        color: Some(ColorWrite {
+            target: g.surface(),
+            clear: Some(Color::BLACK),
+        }),
+        depth: Some(DepthWrite {
+            target: g.primary_depth(),
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "overlay",
+        kind: PassKind::Overlay2D,
+        reads: Vec::new(),
+        color: Some(ColorWrite {
+            target: g.surface(),
+            clear: None,
+        }),
+        depth: None,
+    });
+    let compiled = g.compile(&renderer).expect("compile overlay graph");
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let lines = [LineSegment {
+        start: spawn_core::Vec3::ZERO,
+        end: spawn_core::Vec3::new(0.5, 0.5, 0.0),
+        color: Color::new(1.0, 0.0, 0.0, 1.0),
+    }];
+    let overlay = Overlay {
+        tree: &tree,
+        draw_list: &draw_list,
+        fonts: &fonts,
+        lines: &lines,
+    };
+    let draws: [DrawItem; 0] = [];
+    let scene = RenderScene {
+        camera: &camera,
+        lighting: None,
+        draws: &draws,
+        overlay: Some(overlay),
+    };
+
+    let mut frame = match renderer.begin_frame() {
+        Ok(frame) => frame,
+        Err(RenderError::Surface | RenderError::SurfaceTimeout) => {
+            eprintln!("device.rs: surface not presentable on this host; skipping (spec §13 gate)");
+            return;
+        }
+        Err(e) => panic!("begin_frame: {e}"),
+    };
+    frame
+        .execute(&compiled, &scene)
+        .expect("execute overlay graph");
     frame.end_frame().expect("end");
 }

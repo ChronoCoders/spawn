@@ -45,6 +45,7 @@ pub use light::{DirectionalLight, Lighting, ShadowConfig};
 pub use material::{Material, MaterialUniform};
 pub use mesh::{Mesh, Vertex};
 pub use passes::forward_opaque::{DrawItem, RenderScene};
+pub use passes::overlay::{FontRegistry, LineSegment, Overlay};
 pub use pipeline::{
     BindGroupLayouts, PipelineCache, PipelineKey, RenderStateKey, ShaderStore, VertexLayoutId,
 };

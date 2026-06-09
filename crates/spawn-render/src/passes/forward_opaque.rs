@@ -10,15 +10,18 @@ use crate::error::RenderResult;
 use crate::light::Lighting;
 use crate::material::Material;
 use crate::mesh::Mesh;
+use crate::passes::overlay::Overlay;
 use crate::pipeline::ModelUniform;
 use crate::renderer::Renderer;
 
 /// The scene to render: one active camera, optional lighting (required by the
-/// shadow and lit passes), and the caller-ordered draws.
+/// shadow and lit passes), the caller-ordered draws, and optional overlay data
+/// (the `spawn_ui` draw list + editor lines, consumed by the `Overlay2D` pass).
 pub struct RenderScene<'a> {
     pub camera: &'a Camera,
     pub lighting: Option<&'a Lighting>,
     pub draws: &'a [DrawItem<'a>],
+    pub overlay: Option<Overlay<'a>>,
 }
 
 /// A single opaque draw: mesh + material + model-to-world transform.

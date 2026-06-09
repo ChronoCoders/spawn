@@ -11,6 +11,7 @@ workspace = true
 spawn-core = { path = "../spawn-core", version = "0.1.0" }
 spawn-platform = { path = "../spawn-platform", version = "0.1.0" }
 spawn-asset = { path = "../spawn-asset", version = "0.1.0" }
+spawn-ui = { path = "../spawn-ui", version = "0.1.0" }
 wgpu = "22"
 bytemuck = { version = "1", features = ["derive"] }
 raw-window-handle = "0.6"

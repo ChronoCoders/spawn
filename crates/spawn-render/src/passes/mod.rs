@@ -3,4 +3,5 @@
 
 pub mod forward_lit;
 pub mod forward_opaque;
+pub mod overlay;
 pub mod shadow_depth;

@@ -150,6 +150,15 @@ impl Font {
     }
 }
 
+/// A [`Font`] is a `spawn_ui` text-measure provider, so the editor's layout and
+/// the overlay's glyph positioning use the same metrics (no drift between the
+/// measured text box and the drawn glyphs).
+impl spawn_ui::TextMeasure for Font {
+    fn measure(&mut self, text: &str, _max_width: Option<f32>) -> Vec2 {
+        self.metrics.measure(text)
+    }
+}
+
 /// Rasterizes the embedded glyph table into a tightly packed RGBA8 atlas: white
 /// (opaque) where a glyph bit is set, transparent elsewhere, so the overlay
 /// shader can multiply it by the UI color as a coverage mask.

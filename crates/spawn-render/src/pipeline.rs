@@ -15,13 +15,18 @@ use crate::format::{CompareFn, CullMode, DepthFormat, TextureFormat, Topology};
 use crate::graph::PassKind;
 use crate::light::LightUniform;
 use crate::material::MaterialUniform;
-use crate::mesh::Vertex;
+use crate::mesh::{LineVertex, UiVertex, Vertex};
 
-/// The single vertex layout in Phase 1. Modeled as an enum so the cache key
-/// stays future-proof when more layouts arrive.
+/// The vertex layout a pipeline consumes. Part of the cache key so pipelines with
+/// different vertex inputs are distinct entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VertexLayoutId {
+    /// The 3D mesh vertex (position/normal/uv) — forward and shadow passes.
     PositionNormalUv,
+    /// The 2D overlay UI vertex (clip position / uv / color).
+    UiQuad,
+    /// The overlay line vertex (world position / color).
+    OverlayLine,
 }
 
 /// The render-state half of a [`PipelineKey`]. All fields are `Copy + Eq + Hash`
@@ -141,6 +146,10 @@ pub struct BindGroupLayouts {
     pub camera: wgpu::BindGroupLayout,
     pub material: wgpu::BindGroupLayout,
     pub light: wgpu::BindGroupLayout,
+    /// Overlay UI texture group (group 0 of the UI pipeline): a float texture at
+    /// binding 0 and a filtering sampler at binding 1. Bound to the 1×1 white
+    /// texture for solid rects/borders, or a font atlas for text.
+    pub overlay_texture: wgpu::BindGroupLayout,
 }
 
 impl BindGroupLayouts {
@@ -241,10 +250,32 @@ impl BindGroupLayouts {
                 },
             ],
         });
+        let overlay_texture = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("spawn-overlay-texture-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
         Self {
             camera,
             material,
             light,
+            overlay_texture,
         }
     }
 }
@@ -297,12 +328,23 @@ impl PipelineCache {
 
             // The group set and fragment stage depend on the pass: shadow is
             // depth-only (group 0, no fragment, no color target); lit binds the
-            // light group; opaque is unlit. wgpu inserts all barriers — the layout
-            // here only declares the resource interface.
+            // light group; opaque is unlit; the overlay's UI pipeline binds only a
+            // texture group (group 0) while its line pipeline reuses the camera
+            // group. wgpu inserts all barriers — the layout here only declares the
+            // resource interface.
             let bind_group_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
                 PassKind::ForwardOpaque => &[&layouts.camera, &layouts.material],
                 PassKind::ForwardLit => &[&layouts.camera, &layouts.material, &layouts.light],
                 PassKind::ShadowDepth => &[&layouts.camera],
+                PassKind::Overlay2D => match key.vertex_layout {
+                    VertexLayoutId::UiQuad => &[&layouts.overlay_texture],
+                    VertexLayoutId::OverlayLine => &[&layouts.camera],
+                    VertexLayoutId::PositionNormalUv => {
+                        return Err(RenderError::InvalidArgument {
+                            context: "overlay pipeline needs a UiQuad or OverlayLine vertex layout",
+                        })
+                    }
+                },
             };
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("spawn-pipeline-layout"),
@@ -310,30 +352,47 @@ impl PipelineCache {
                 push_constant_ranges: &[],
             });
 
-            let depth_stencil = wgpu::DepthStencilState {
-                format: key.render_state.depth_format.to_wgpu(),
-                depth_write_enabled: key.render_state.depth_write,
-                depth_compare: key.render_state.depth_compare,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+            // The overlay composites on top of the lit frame: no depth, alpha
+            // blended. The 3D passes are opaque with depth.
+            let depth_stencil = match key.pass {
+                PassKind::Overlay2D => None,
+                _ => Some(wgpu::DepthStencilState {
+                    format: key.render_state.depth_format.to_wgpu(),
+                    depth_write_enabled: key.render_state.depth_write,
+                    depth_compare: key.render_state.depth_compare,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+            };
+            let blend = match key.pass {
+                PassKind::Overlay2D => Some(wgpu::BlendState::ALPHA_BLENDING),
+                _ => None,
             };
 
             let color_targets = [Some(wgpu::ColorTargetState {
                 format: key.render_state.color_format,
-                blend: None,
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })];
             // The shadow pass writes depth only — no fragment stage, no color
             // attachment.
             let fragment = match key.pass {
                 PassKind::ShadowDepth => None,
-                PassKind::ForwardOpaque | PassKind::ForwardLit => Some(wgpu::FragmentState {
-                    module,
-                    entry_point: "fs_main",
-                    targets: &color_targets,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
+                PassKind::ForwardOpaque | PassKind::ForwardLit | PassKind::Overlay2D => {
+                    Some(wgpu::FragmentState {
+                        module,
+                        entry_point: "fs_main",
+                        targets: &color_targets,
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    })
+                }
             };
+
+            let vertex_buffers = [match key.vertex_layout {
+                VertexLayoutId::PositionNormalUv => Vertex::layout(),
+                VertexLayoutId::UiQuad => UiVertex::layout(),
+                VertexLayoutId::OverlayLine => LineVertex::layout(),
+            }];
 
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("spawn-pipeline"),
@@ -341,7 +400,7 @@ impl PipelineCache {
                 vertex: wgpu::VertexState {
                     module,
                     entry_point: "vs_main",
-                    buffers: &[Vertex::layout()],
+                    buffers: &vertex_buffers,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment,
@@ -354,7 +413,7 @@ impl PipelineCache {
                     polygon_mode: wgpu::PolygonMode::Fill,
                     conservative: false,
                 },
-                depth_stencil: Some(depth_stencil),
+                depth_stencil,
                 multisample: wgpu::MultisampleState::default(),
                 multiview: None,
                 cache: None,

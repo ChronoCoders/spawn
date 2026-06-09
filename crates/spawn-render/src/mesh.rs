@@ -38,6 +38,64 @@ impl Vertex {
     }
 }
 
+/// Overlay UI vertex: clip-space position (the overlay builds positions in NDC on
+/// the CPU from the surface size), atlas/texture UV, and a premultiplied-free
+/// RGBA color the fragment multiplies by the sampled texel. `#[repr(C)]` + `Pod`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct UiVertex {
+    pub position: [f32; 2],
+    pub uv: [f32; 2],
+    pub color: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<UiVertex>() == 32);
+
+impl UiVertex {
+    /// Attribute table: location 0 position (clip xy), 1 uv, 2 color.
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x2,
+        2 => Float32x4,
+    ];
+
+    pub const fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<UiVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
+/// Overlay line vertex: world-space position (projected by the scene camera) and
+/// an RGBA color. Used for gizmo handles and selection outlines. `#[repr(C)]` +
+/// `Pod`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<LineVertex>() == 28);
+
+impl LineVertex {
+    /// Attribute table: location 0 position (world xyz), 1 color.
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![
+        0 => Float32x3,
+        1 => Float32x4,
+    ];
+
+    pub const fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LineVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 /// GPU-resident mesh: owns its vertex and index buffers. Dropping the `Mesh`
 /// drops the wrapped `wgpu::Buffer`s; wgpu defers GPU-side destruction until the
 /// GPU is idle on them.

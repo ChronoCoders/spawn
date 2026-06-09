@@ -74,6 +74,11 @@ pub enum PassKind {
     ForwardOpaque,
     ShadowDepth,
     ForwardLit,
+    /// 2D overlay: rasterizes a `spawn_ui` draw list (rects, borders, text,
+    /// scissors) plus editor line geometry (gizmos, selection) onto the surface
+    /// after the lit scene. No depth; alpha-blended; loads (composites over) the
+    /// existing color.
+    Overlay2D,
 }
 
 /// A color attachment a pass writes.
