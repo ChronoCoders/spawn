@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use crate::asset_handle::ShaderHandle;
 use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
 use crate::format::{DepthFormat, PowerPreference, PresentMode, SurfaceSize, TextureFormat};
-use crate::pipeline::{BindGroupLayouts, ModelUniform, PipelineCache, ShaderStore};
+use crate::pipeline::{BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, ShaderStore};
 use crate::texture::{SamplerConfig, Texture};
 
 /// The `raw-window-handle` bound a surface source must satisfy. `Send + Sync` is
@@ -337,6 +338,23 @@ impl<'w> Renderer<'w> {
     /// groups and pipelines are layout-compatible.
     pub fn bind_group_layouts(&self) -> &BindGroupLayouts {
         &self.layouts
+    }
+
+    /// Compiles WGSL under `handle` into the shader store (setup/load path; never
+    /// per frame). Composes the device and the store internally so callers do not
+    /// have to juggle the disjoint borrows the bare accessors would require.
+    pub fn load_shader(&mut self, handle: ShaderHandle, source: &str) -> RenderResult<()> {
+        self.shaders.load(&self.device, handle, source)?;
+        Ok(())
+    }
+
+    /// Builds and caches the pipeline for `key` (its shader must already be loaded
+    /// via [`load_shader`](Renderer::load_shader)). Setup/load path; never per
+    /// frame. Composes the cache, layouts, and shader store internally.
+    pub fn build_pipeline(&mut self, key: PipelineKey) -> RenderResult<()> {
+        self.cache
+            .get_or_create(&self.device, &self.layouts, key, &self.shaders)?;
+        Ok(())
     }
 
     pub(crate) fn fallback_texture(&self) -> &Texture {

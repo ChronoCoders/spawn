@@ -13,8 +13,8 @@ use spawn_asset::AssetId;
 use spawn_core::{Color, Mat4};
 use spawn_platform::Window;
 use spawn_render::{
-    Camera, ColorWrite, CompiledGraph, DepthWrite, PassDesc, PassKind, RenderGraph, RenderScene,
-    Renderer, RendererConfig, SurfaceSize,
+    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, PassDesc, PassKind, RenderGraph,
+    RenderResources, RenderScene, Renderer, RendererConfig, SurfaceSize,
 };
 
 use crate::error::EngineResult;
@@ -163,28 +163,43 @@ impl RenderBackend for HeadlessBackend {
 /// the platform window via [`Renderer::from_owned`]) and a validated single
 /// forward-opaque [`RenderGraph`].
 ///
-/// 2a scope: `submit` extracts the camera proxy into a [`Camera`] and runs the
-/// Phase 1 frame lifecycle, presenting the camera-cleared surface. Rasterizing
-/// draw proxies (resolving each `AssetId` to a GPU mesh/material) needs the
-/// asset→GPU upload + pipeline/shader setup the roadmap assigns to 2b; the draw
-/// list crosses the boundary and is delivered, but is not yet rasterized here.
+/// `submit` extracts the camera proxy into a [`Camera`], resolves each draw proxy
+/// to its GPU mesh/material through the [`RenderResources`] registry (skipping
+/// unregistered ids), and runs the frame lifecycle. The registry is populated by
+/// app render-setup hooks at construction.
 pub struct WgpuBackend {
     renderer: Renderer<'static>,
     graph: RenderGraph,
     compiled: CompiledGraph,
+    resources: RenderResources,
 }
+
+/// An app-provided render-setup routine: builds GPU `Mesh`/`Material` resources
+/// from the renderer and registers them in the registry, run once at backend
+/// construction (after the renderer exists). Headless mode has no renderer and
+/// does not run these.
+pub type RenderSetup = Box<dyn FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()>>;
 
 impl WgpuBackend {
     /// Builds the backend from an owned window handle and an initial surface
     /// size, with `clear_color` as the per-frame surface clear. Compiles a single
-    /// forward-opaque pass targeting the surface.
+    /// forward-opaque pass targeting the surface, then runs the render-setup
+    /// hooks to populate the resource registry.
     pub fn new(
         window: Arc<Window>,
         size: SurfaceSize,
         config: RendererConfig,
         clear_color: Color,
+        setups: Vec<RenderSetup>,
     ) -> EngineResult<Self> {
-        let renderer = Renderer::from_owned(window, size, config)?;
+        let mut renderer = Renderer::from_owned(window, size, config)?;
+        // `renderer` and `resources` are locals here, so a setup hook can borrow
+        // `&mut renderer` (to build pipelines) and `&mut resources` together
+        // without a field-borrow clash.
+        let mut resources = RenderResources::new();
+        for setup in setups {
+            setup(&mut renderer, &mut resources)?;
+        }
         let mut graph = RenderGraph::new();
         let surface = graph.surface();
         let depth = graph.primary_depth();
@@ -207,6 +222,7 @@ impl WgpuBackend {
             renderer,
             graph,
             compiled,
+            resources,
         })
     }
 }
@@ -214,9 +230,25 @@ impl WgpuBackend {
 impl RenderBackend for WgpuBackend {
     fn submit(&mut self, proxies: &RenderProxies) -> EngineResult<()> {
         let camera = Camera::new(proxies.camera.view, proxies.camera.projection);
+        // Resolve each proxy to its GPU mesh/material; an unregistered id is
+        // skipped. The draw list borrows the registry, so it is built per frame
+        // (a reused buffer would be self-referential with `resources`).
+        let draws: Vec<DrawItem> = proxies
+            .draws
+            .iter()
+            .filter_map(|p| {
+                self.resources
+                    .resolve(p.mesh, p.material)
+                    .map(|(mesh, material)| DrawItem {
+                        mesh,
+                        material,
+                        model: p.model,
+                    })
+            })
+            .collect();
         let scene = RenderScene {
             camera: &camera,
-            draws: &[],
+            draws: &draws,
         };
         let mut frame = self.renderer.begin_frame()?;
         frame.execute(&self.compiled, &scene)?;

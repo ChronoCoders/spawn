@@ -21,6 +21,7 @@ mod mesh;
 mod passes;
 mod pipeline;
 mod renderer;
+mod resources;
 mod texture;
 
 pub use asset_handle::ShaderHandle;
@@ -42,4 +43,5 @@ pub use pipeline::{
     BindGroupLayouts, PipelineCache, PipelineKey, RenderStateKey, ShaderStore, VertexLayoutId,
 };
 pub use renderer::{HasWindowHandleSet, Renderer, RendererConfig};
+pub use resources::RenderResources;
 pub use texture::{SamplerConfig, Texture};

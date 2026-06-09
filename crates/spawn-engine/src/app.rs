@@ -8,7 +8,7 @@ use spawn_core::Color;
 use spawn_ecs::system::BuildableSystem;
 use spawn_ecs::{EcsResult, Event, IntoSystem, Resource, Stage, World};
 use spawn_platform::{EventLoop, PlatformApp, PlatformEvent, Window, WindowEvent};
-use spawn_render::{RendererConfig, SurfaceSize};
+use spawn_render::{RenderResources, Renderer, RendererConfig, SurfaceSize};
 
 use crate::config::EngineConfig;
 use crate::engine::{Clock, Engine, EngineParts};
@@ -27,6 +27,7 @@ pub struct App {
     startup_stage: Stage,
     fixed_hooks: Vec<crate::engine::FixedHook>,
     extracts: Vec<crate::engine::ExtractFn>,
+    render_setups: Vec<crate::render::RenderSetup>,
     config: EngineConfig,
 }
 
@@ -53,6 +54,7 @@ impl App {
             startup_stage: Stage::new("startup"),
             fixed_hooks: Vec::new(),
             extracts: Vec::new(),
+            render_setups: Vec::new(),
             config: EngineConfig::default(),
         }
     }
@@ -122,6 +124,18 @@ impl App {
         F: FnMut(&World, &mut RenderProxies) + Send + 'static,
     {
         self.extracts.push(Box::new(extract));
+        self
+    }
+
+    /// Registers a render-setup hook: builds GPU mesh/material resources from the
+    /// renderer and registers them in the [`RenderResources`] registry, run once
+    /// when the wgpu backend is created (windowed mode). The headless backend has
+    /// no renderer, so these are not run there.
+    pub fn add_render_setup<F>(&mut self, setup: F) -> &mut Self
+    where
+        F: FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()> + 'static,
+    {
+        self.render_setups.push(Box::new(setup));
         self
     }
 
@@ -205,6 +219,7 @@ impl App {
             startup_stage: self.startup_stage,
             fixed_hooks: self.fixed_hooks,
             extracts: self.extracts,
+            render_setups: self.render_setups,
             config: self.config,
         }
     }
@@ -222,19 +237,25 @@ struct WindowedDriver {
 
 impl PlatformApp for WindowedDriver {
     fn init(&mut self, window: Arc<Window>) {
-        let Some(parts) = self.parts.take() else {
+        let Some(mut parts) = self.parts.take() else {
             return;
         };
+        let setups = std::mem::take(&mut parts.render_setups);
         let (w, h) = window.size();
         let size = SurfaceSize::new(w.max(1), h.max(1));
-        let backend: Box<dyn RenderBackend> =
-            match WgpuBackend::new(window, size, RendererConfig::default(), Color::BLACK) {
-                Ok(backend) => Box::new(backend),
-                Err(err) => {
-                    *self.error.borrow_mut() = Some(err);
-                    return;
-                }
-            };
+        let backend: Box<dyn RenderBackend> = match WgpuBackend::new(
+            window,
+            size,
+            RendererConfig::default(),
+            Color::BLACK,
+            setups,
+        ) {
+            Ok(backend) => Box::new(backend),
+            Err(err) => {
+                *self.error.borrow_mut() = Some(err);
+                return;
+            }
+        };
         match Engine::assemble(parts, backend, Clock::Realtime(None)) {
             Ok(engine) => self.engine = Some(engine),
             Err(err) => *self.error.borrow_mut() = Some(err),

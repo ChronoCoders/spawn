@@ -45,6 +45,10 @@ pub(crate) struct EngineParts {
     pub startup_stage: Stage,
     pub fixed_hooks: Vec<FixedHook>,
     pub extracts: Vec<ExtractFn>,
+    /// Render-setup hooks; consumed by the windowed driver to populate the wgpu
+    /// backend's resource registry. The headless path has no renderer and ignores
+    /// them.
+    pub render_setups: Vec<crate::render::RenderSetup>,
     pub config: EngineConfig,
 }
 
@@ -85,6 +89,9 @@ impl Engine {
             startup_stage,
             fixed_hooks,
             extracts,
+            // Render-setup hooks are consumed by the windowed driver before
+            // assemble; the headless path has no renderer to run them against.
+            render_setups: _,
             config,
         } = parts;
 

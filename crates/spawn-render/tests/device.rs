@@ -272,3 +272,109 @@ fn from_owned_constructs_static_renderer() {
         assert_eq!(renderer.size(), SIZE);
     }
 }
+
+const UNLIT_WGSL: &str = r#"
+struct Camera { view_proj: mat4x4<f32>, view_pos: vec4<f32> };
+struct Model { model: mat4x4<f32> };
+struct Material { base_color: vec4<f32>, params: vec4<f32> };
+@group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var<uniform> model: Model;
+@group(1) @binding(0) var<uniform> material: Material;
+@group(1) @binding(1) var tex: texture_2d<f32>;
+@group(1) @binding(2) var samp: sampler;
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex
+fn vs_main(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>) -> VsOut {
+    var out: VsOut;
+    out.clip = camera.view_proj * model.model * vec4<f32>(position, 1.0);
+    out.uv = uv;
+    return out;
+}
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    return material.base_color * textureSample(tex, samp, in.uv);
+}
+"#;
+
+/// GPU instance required: builds a mesh + material (loading a shader and a
+/// pipeline through the new `Renderer::load_shader`/`build_pipeline`), registers
+/// them in a `RenderResources`, and resolves the pair — the rasterization
+/// resolution the engine's `WgpuBackend` performs each frame.
+#[test]
+fn render_resources_resolve_registered_resources() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_asset::AssetId;
+    use spawn_render::{
+        CompareFn, CullMode, Material, MaterialUniform, Mesh, PipelineKey, RenderResources,
+        RenderStateKey, ShaderHandle, Topology, Vertex, VertexLayoutId,
+    };
+
+    let shader = ShaderHandle::from_id(AssetId::from_raw(7));
+    renderer
+        .load_shader(shader, UNLIT_WGSL)
+        .expect("shader compiles");
+    let state = RenderStateKey {
+        color_format: renderer.surface_format(),
+        depth_format: renderer.depth_format(),
+        depth_compare: CompareFn::Less,
+        depth_write: true,
+        cull: CullMode::Back,
+        topology: Topology::TriangleList,
+    };
+    let key = PipelineKey {
+        shader,
+        vertex_layout: VertexLayoutId::PositionNormalUv,
+        render_state: state,
+    };
+    renderer.build_pipeline(key).expect("pipeline builds");
+
+    let verts = [
+        Vertex {
+            position: [-0.5, -0.5, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.0, 1.0],
+        },
+        Vertex {
+            position: [0.5, -0.5, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            position: [0.0, 0.5, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.5, 0.0],
+        },
+    ];
+    let mesh = Mesh::new(renderer.device(), &verts, &[0, 1, 2]).expect("mesh");
+    let material = Material::new(
+        &renderer,
+        shader,
+        MaterialUniform {
+            base_color: [1.0, 0.5, 0.2, 1.0],
+            params: [0.0; 4],
+        },
+        None,
+        state,
+    )
+    .expect("material");
+
+    let mut res = RenderResources::new();
+    let mesh_id = AssetId::from_canonical_path("mesh");
+    let mat_id = AssetId::from_canonical_path("material");
+    res.insert_mesh(mesh_id, mesh);
+    res.insert_material(mat_id, material);
+
+    assert!(
+        res.resolve(mesh_id, mat_id).is_some(),
+        "registered pair resolves"
+    );
+    assert!(
+        res.resolve(mesh_id, AssetId::from_canonical_path("unknown"))
+            .is_none(),
+        "an unregistered id resolves to None"
+    );
+}
