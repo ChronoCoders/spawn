@@ -2,6 +2,7 @@
 
 use crate::command::Command;
 use crate::error::{EditorError, EditorResult};
+use crate::transaction::OpenTransaction;
 use spawn_ecs::World;
 
 /// Bounded undo/redo history of executed commands.
@@ -17,6 +18,10 @@ pub struct CommandStack {
     /// Undo-history length at the last `mark_saved`, or `None` once a save point
     /// has been invalidated by eviction or `clear` (until the next `mark_saved`).
     save_point: Option<usize>,
+    /// The in-flight scoped transaction, if any. While open, executed commands
+    /// are captured into it instead of pushed directly; the outermost
+    /// `end_transaction` commits the lot as one composite undo entry.
+    open: Option<OpenTransaction>,
 }
 
 impl CommandStack {
@@ -28,6 +33,7 @@ impl CommandStack {
             redo: Vec::new(),
             capacity: capacity.max(1),
             save_point: Some(0),
+            open: None,
         }
     }
 
@@ -67,21 +73,29 @@ impl CommandStack {
         self.redo.last().map(|c| c.label())
     }
 
-    /// Applies `command`, then pushes it onto the undo history.
+    /// Applies `command`, then records it.
     ///
-    /// On `Ok` the redo history is cleared (a new edit invalidates redo) and the
-    /// capacity bound is enforced. On `Err` the command is not pushed and the
-    /// stack is unchanged (`apply` implementations leave the world unmodified on
-    /// error).
+    /// With a transaction open (see [`begin_transaction`](CommandStack::begin_transaction)),
+    /// the applied command is captured into it and the undo/redo history is left
+    /// untouched until commit. Otherwise it is pushed onto the undo history, the
+    /// redo history is cleared (a new edit invalidates redo), and the capacity
+    /// bound is enforced. On `Err` the command is neither captured nor pushed and
+    /// the stack is unchanged (`apply` implementations leave the world unmodified
+    /// on error).
     pub fn execute(
         &mut self,
         mut command: Box<dyn Command>,
         world: &mut World,
     ) -> EditorResult<()> {
         command.apply(world)?;
-        self.redo.clear();
-        self.undo.push(command);
-        self.enforce_capacity();
+        match self.open.as_mut() {
+            Some(open) => open.capture(command, false),
+            None => {
+                self.redo.clear();
+                self.undo.push(command);
+                self.enforce_capacity();
+            }
+        }
         Ok(())
     }
 
@@ -99,6 +113,12 @@ impl CommandStack {
         world: &mut World,
     ) -> EditorResult<()> {
         command.apply(world)?;
+        if let Some(open) = self.open.as_mut() {
+            // Inside a transaction, drag-merge into the captured list; the redo
+            // boundary does not apply (nothing is pushed until commit).
+            open.capture(command, true);
+            return Ok(());
+        }
         if self.redo.is_empty() {
             if let Some(top) = self.undo.last_mut() {
                 if top.try_merge(command.as_ref()) {
@@ -110,6 +130,68 @@ impl CommandStack {
         self.undo.push(command);
         self.enforce_capacity();
         Ok(())
+    }
+
+    /// Opens a scoped transaction (or nests one). While open, every executed
+    /// command is captured into it rather than pushed; the outermost
+    /// [`end_transaction`](CommandStack::end_transaction) commits the lot as one
+    /// undoable entry. A nested `begin` only raises the action counter and adopts
+    /// the outer label (the first `label` wins; nested labels are ignored).
+    pub fn begin_transaction(&mut self, label: impl Into<String>) {
+        match self.open.as_mut() {
+            Some(open) => open.enter(),
+            None => self.open = Some(OpenTransaction::new(label.into())),
+        }
+    }
+
+    /// Closes a transaction scope. A nested `end` only lowers the action counter.
+    /// The outermost `end` commits the captured commands as a single composite
+    /// undo entry (clearing redo and enforcing capacity); closing with no
+    /// captured commands pushes nothing and is not an error. `world` is accepted
+    /// for API symmetry — the captured commands were already applied at execute
+    /// time, so commit performs no world mutation. `NoOpenTransaction` if no
+    /// transaction is open.
+    pub fn end_transaction(&mut self, _world: &mut World) -> EditorResult<()> {
+        let committing = match self.open.as_mut() {
+            Some(open) => open.exit(),
+            None => return Err(EditorError::NoOpenTransaction),
+        };
+        if !committing {
+            return Ok(());
+        }
+        let open = match self.open.take() {
+            Some(open) => open,
+            None => return Ok(()),
+        };
+        if open.is_empty() {
+            return Ok(());
+        }
+        self.redo.clear();
+        self.undo.push(Box::new(open.into_composite()));
+        self.enforce_capacity();
+        Ok(())
+    }
+
+    /// Aborts the open transaction at any nesting depth: reverts every captured
+    /// command in reverse, restoring the world to its pre-transaction state, and
+    /// discards the transaction. The undo/redo history and save point are
+    /// untouched. `NoOpenTransaction` if none is open; a failing `revert`
+    /// propagates after the rest are still rolled back.
+    pub fn abort_transaction(&mut self, world: &mut World) -> EditorResult<()> {
+        match self.open.take() {
+            Some(open) => open.rollback(world),
+            None => Err(EditorError::NoOpenTransaction),
+        }
+    }
+
+    /// The current transaction nesting depth; `0` when none is open.
+    pub fn transaction_depth(&self) -> u32 {
+        self.open.as_ref().map_or(0, OpenTransaction::depth)
+    }
+
+    /// Whether a transaction is currently open.
+    pub fn in_transaction(&self) -> bool {
+        self.open.is_some()
     }
 
     /// Reverts the top undo command, moving it to the redo history on success.
@@ -360,5 +442,170 @@ mod tests {
         assert!(matches!(res, Err(EditorError::ComponentMissing { .. })));
         assert_eq!(s.len(), before);
         assert!(!s.can_undo());
+    }
+
+    #[test]
+    fn nested_transactions_flatten_to_one_undo_entry() {
+        let mut w = world();
+        let e = fixture(&mut w);
+        let mut s = CommandStack::new(16);
+        s.begin_transaction("Outer");
+        assert_eq!(s.transaction_depth(), 1);
+        s.execute(Box::new(SetTransform3D::new(e, at(1.0))), &mut w)
+            .unwrap();
+        s.begin_transaction("inner-ignored");
+        assert_eq!(s.transaction_depth(), 2);
+        s.execute(Box::new(SetTransform3D::new(e, at(2.0))), &mut w)
+            .unwrap();
+        s.end_transaction(&mut w).unwrap();
+        assert_eq!(s.transaction_depth(), 1);
+        assert!(s.in_transaction());
+        s.end_transaction(&mut w).unwrap();
+        assert_eq!(s.transaction_depth(), 0);
+        assert!(!s.in_transaction());
+
+        // One composite entry, labelled by the outermost begin.
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.undo_label(), Some("Outer"));
+
+        // One undo reverts the whole nested gesture; one redo re-applies it.
+        s.undo(&mut w).unwrap();
+        assert!(w
+            .get::<Transform3D>(e)
+            .unwrap()
+            .approx_eq_default(Transform3D::IDENTITY));
+        s.redo(&mut w).unwrap();
+        assert!(w.get::<Transform3D>(e).unwrap().approx_eq_default(at(2.0)));
+    }
+
+    #[test]
+    fn drag_inside_transaction_stays_one_step() {
+        let mut w = world();
+        let e = fixture(&mut w);
+        let mut s = CommandStack::new(16);
+        s.begin_transaction("Drag");
+        for x in 1..=5 {
+            s.execute_merged(Box::new(SetTransform3D::new(e, at(x as f32))), &mut w)
+                .unwrap();
+        }
+        s.end_transaction(&mut w).unwrap();
+        assert_eq!(s.len(), 1);
+        assert!(w.get::<Transform3D>(e).unwrap().approx_eq_default(at(5.0)));
+        s.undo(&mut w).unwrap();
+        assert!(w
+            .get::<Transform3D>(e)
+            .unwrap()
+            .approx_eq_default(Transform3D::IDENTITY));
+    }
+
+    #[test]
+    fn abort_restores_world_and_leaves_stack_untouched() {
+        let mut w = world();
+        let e = fixture(&mut w);
+        let mut s = CommandStack::new(16);
+        s.execute(Box::new(SetTransform3D::new(e, at(1.0))), &mut w)
+            .unwrap();
+        s.mark_saved();
+        s.begin_transaction("Drag");
+        s.execute_merged(Box::new(SetTransform3D::new(e, at(2.0))), &mut w)
+            .unwrap();
+        s.execute_merged(Box::new(SetTransform3D::new(e, at(3.0))), &mut w)
+            .unwrap();
+        assert!(w.get::<Transform3D>(e).unwrap().approx_eq_default(at(3.0)));
+        s.abort_transaction(&mut w).unwrap();
+        // World back to the pre-transaction value; stack and save point untouched.
+        assert!(w.get::<Transform3D>(e).unwrap().approx_eq_default(at(1.0)));
+        assert_eq!(s.len(), 1);
+        assert!(!s.is_dirty());
+        assert!(!s.in_transaction());
+    }
+
+    #[test]
+    fn empty_transaction_commits_nothing() {
+        let mut w = world();
+        let mut s = CommandStack::new(8);
+        s.begin_transaction("Empty");
+        assert!(s.in_transaction());
+        s.end_transaction(&mut w).unwrap();
+        assert!(!s.in_transaction());
+        assert_eq!(s.len(), 0);
+        assert!(!s.can_undo());
+        assert!(!s.is_dirty());
+    }
+
+    #[test]
+    fn composite_counts_as_one_entry_against_capacity() {
+        let mut w = world();
+        let e = fixture(&mut w);
+        let mut s = CommandStack::new(1);
+        s.begin_transaction("A");
+        s.execute(Box::new(SetTransform3D::new(e, at(1.0))), &mut w)
+            .unwrap();
+        s.execute(Box::new(SetTransform3D::new(e, at(2.0))), &mut w)
+            .unwrap();
+        s.end_transaction(&mut w).unwrap();
+        assert_eq!(s.len(), 1);
+        // Committing B evicts the whole A composite (capacity 1).
+        s.begin_transaction("B");
+        s.execute(Box::new(SetTransform3D::new(e, at(3.0))), &mut w)
+            .unwrap();
+        s.end_transaction(&mut w).unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.undo_label(), Some("B"));
+        s.undo(&mut w).unwrap();
+        assert!(matches!(s.undo(&mut w), Err(EditorError::NothingToUndo)));
+    }
+
+    #[test]
+    fn committing_transaction_clears_redo() {
+        let mut w = world();
+        let e = fixture(&mut w);
+        let mut s = CommandStack::new(8);
+        s.execute(Box::new(SetTransform3D::new(e, at(1.0))), &mut w)
+            .unwrap();
+        s.undo(&mut w).unwrap();
+        assert!(s.can_redo());
+        s.begin_transaction("New");
+        s.execute(Box::new(SetTransform3D::new(e, at(2.0))), &mut w)
+            .unwrap();
+        s.end_transaction(&mut w).unwrap();
+        assert!(!s.can_redo());
+    }
+
+    #[test]
+    fn end_or_abort_without_begin_errors() {
+        let mut w = world();
+        let mut s = CommandStack::new(8);
+        assert!(matches!(
+            s.end_transaction(&mut w),
+            Err(EditorError::NoOpenTransaction)
+        ));
+        assert!(matches!(
+            s.abort_transaction(&mut w),
+            Err(EditorError::NoOpenTransaction)
+        ));
+    }
+
+    #[test]
+    fn failed_apply_in_transaction_keeps_applied_then_abort_restores() {
+        let mut w = world();
+        let e = fixture(&mut w);
+        let bare = w.spawn();
+        let mut s = CommandStack::new(16);
+        s.begin_transaction("Edit");
+        s.execute(Box::new(SetTransform3D::new(e, at(5.0))), &mut w)
+            .unwrap();
+        // A command whose apply fails is not captured; the transaction still
+        // holds the first, successfully-applied command.
+        let res = s.execute(Box::new(SetTransform3D::new(bare, at(1.0))), &mut w);
+        assert!(matches!(res, Err(EditorError::ComponentMissing { .. })));
+        assert!(s.in_transaction());
+        s.abort_transaction(&mut w).unwrap();
+        assert!(!s.in_transaction());
+        assert!(w
+            .get::<Transform3D>(e)
+            .unwrap()
+            .approx_eq_default(Transform3D::IDENTITY));
+        assert_eq!(s.len(), 0);
     }
 }

@@ -11,6 +11,7 @@ pub mod gizmo;
 pub mod selection;
 pub mod stack;
 pub mod state;
+mod transaction;
 
 pub use command::builtin::{DespawnEntity, SetTransform3D, SpawnEntity};
 pub use command::Command;

@@ -33,6 +33,9 @@ pub enum EditorError {
         /// Description of the disallowed transition.
         context: &'static str,
     },
+    /// `end_transaction`/`abort_transaction` was called with no transaction open
+    /// (an unbalanced begin/end in the caller).
+    NoOpenTransaction,
     /// An underlying ECS operation failed.
     Ecs(EcsError),
 }
@@ -56,6 +59,7 @@ impl fmt::Display for EditorError {
             Self::NothingToUndo => write!(f, "nothing to undo"),
             Self::NothingToRedo => write!(f, "nothing to redo"),
             Self::InvalidMode { context } => write!(f, "invalid editor mode: {context}"),
+            Self::NoOpenTransaction => write!(f, "no open transaction"),
             Self::Ecs(inner) => write!(f, "ecs error: {inner}"),
         }
     }
