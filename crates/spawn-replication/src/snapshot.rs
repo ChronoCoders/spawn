@@ -387,7 +387,7 @@ pub fn decode_snapshot(
         }
     }
 
-    // Spawns: materialise a local entity, bind the id, apply absolute components.
+    // Spawns.
     while r.read_bool()? {
         let id = ReplId(r.read_bits(32)? as u32);
         if id.0 >= MAX_SPAWN_REPL_ID {

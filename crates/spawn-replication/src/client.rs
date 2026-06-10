@@ -157,7 +157,6 @@ impl ReplicationClient {
                 }
             }
         }
-        // Only send once the handshake has completed.
         if net.state() == ClientState::Connected {
             self.send_input(net)?;
         }

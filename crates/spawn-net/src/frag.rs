@@ -309,7 +309,7 @@ impl Reassembler {
             s.begin(channel, header.fragment_id, count, now);
         }
         if s.received[index] {
-            return None; // duplicate
+            return None;
         }
 
         let start = index * FRAGMENT_PAYLOAD;

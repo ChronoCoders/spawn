@@ -65,7 +65,6 @@ impl<I> InputBuffer<I> {
     /// leaving only the unacked tail to replay.
     pub fn ack(&mut self, through: u16) {
         while let Some((seq, _)) = self.inputs.front() {
-            // Keep inputs strictly newer than the acked sequence.
             if sequence_greater_than(*seq, through) {
                 break;
             }
