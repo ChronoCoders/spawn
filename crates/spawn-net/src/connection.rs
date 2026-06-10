@@ -4,12 +4,17 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use crate::ack::{AckedSequences, ReliableEndpoint};
+use crate::channel::RELIABLE_RESEND_TIMEOUT;
 use crate::channel::{
     ChannelId, ReliableReceiver, ReliableSender, SequencedReceiver, SequencedSender,
     MAX_RELIABLE_PAYLOAD, MAX_SEQUENCED_PAYLOAD, RELIABLE_PREFIX, SEQUENCED_PREFIX,
 };
 use crate::error::{NetError, NetResult};
 use crate::event::ClientId;
+use crate::frag::{
+    FragmentHeader, OutboundFragmented, Reassembled, Reassembler, FRAGMENT_BURST,
+    FRAGMENT_HEADER_SIZE, MAX_FRAGMENTED_PAYLOAD,
+};
 use crate::protocol::{
     control_layout, PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE,
     PROTOCOL_ID,
@@ -136,9 +141,20 @@ pub(crate) struct Connection {
     /// reliable window under the 100 ms resend timeout, so a slot is always reclaimed
     /// (and any stale entry counted lost) before its sequence aliases a live packet.
     packet_to_msg: [Option<u16>; 256],
+    /// Maps a packet sequence (mod 256) to the fragment index it carried, so a peer ack
+    /// marks that fragment of the in-flight reliable fragmented message delivered.
+    /// Disjoint from `packet_to_msg`: a given sequence carries either a reliable channel
+    /// message or a fragment, never both.
+    packet_to_frag: [Option<u16>; 256],
     acked_scratch: AckedSequences,
     unreliable: UnreliableQueue,
     sequenced: UnreliableQueue,
+    /// The single outbound large message being fragmented (one at a time per
+    /// connection); `None` when idle. Reliable: held until all fragments are acked.
+    /// Best-effort: sent once on the next flush, then cleared.
+    out_frag: Option<OutboundFragmented>,
+    next_fragment_id: u16,
+    reassembler: Reassembler,
 }
 
 /// Fixed-capacity ring of best-effort outgoing messages. Best-effort channels drop the
@@ -204,9 +220,13 @@ impl Connection {
             last_send: now,
             send_times: [None; 256],
             packet_to_msg: [None; 256],
+            packet_to_frag: [None; 256],
             acked_scratch: AckedSequences::new(),
             unreliable: UnreliableQueue::new(),
             sequenced: UnreliableQueue::new(),
+            out_frag: None,
+            next_fragment_id: 0,
+            reassembler: Reassembler::new(now),
         }
     }
 
@@ -228,40 +248,52 @@ impl Connection {
         self.stats.on_received(bytes);
     }
 
-    /// Queue an application message on `channel`. Reliable framing/backpressure applies;
-    /// returns `ChannelFull` when the reliable window is saturated (never drops).
+    /// Queue an application message on `channel`. A message within the channel's
+    /// single-datagram limit takes the normal path (reliable framing/backpressure
+    /// applies). A larger message (up to `MAX_FRAGMENTED_PAYLOAD`) is staged for
+    /// fragmentation; `ChannelFull` if another fragmented message is already in flight,
+    /// or if the reliable window is saturated. `PayloadTooLarge` above the fragmented
+    /// ceiling.
     pub fn enqueue(&mut self, channel: ChannelId, bytes: &[u8]) -> NetResult<()> {
-        if bytes.len() > MAX_PAYLOAD_SIZE {
+        let single_max = match channel {
+            ChannelId::ReliableOrdered => MAX_RELIABLE_PAYLOAD,
+            ChannelId::UnreliableSequenced => MAX_SEQUENCED_PAYLOAD,
+            ChannelId::Unreliable => MAX_PAYLOAD_SIZE,
+        };
+        if bytes.len() <= single_max {
+            return match channel {
+                ChannelId::ReliableOrdered => self.rel_send.queue(bytes).map(|_| ()),
+                ChannelId::UnreliableSequenced => {
+                    self.sequenced.push(bytes);
+                    Ok(())
+                }
+                ChannelId::Unreliable => {
+                    self.unreliable.push(bytes);
+                    Ok(())
+                }
+            };
+        }
+
+        // Larger than one datagram → fragment.
+        if bytes.len() > MAX_FRAGMENTED_PAYLOAD {
             return Err(NetError::PayloadTooLarge {
                 size: bytes.len(),
-                max: MAX_PAYLOAD_SIZE,
+                max: MAX_FRAGMENTED_PAYLOAD,
             });
         }
-        match channel {
-            ChannelId::ReliableOrdered => {
-                if bytes.len() > MAX_RELIABLE_PAYLOAD {
-                    return Err(NetError::PayloadTooLarge {
-                        size: bytes.len(),
-                        max: MAX_RELIABLE_PAYLOAD,
-                    });
-                }
-                self.rel_send.queue(bytes).map(|_| ())
-            }
-            ChannelId::UnreliableSequenced => {
-                if bytes.len() > MAX_SEQUENCED_PAYLOAD {
-                    return Err(NetError::PayloadTooLarge {
-                        size: bytes.len(),
-                        max: MAX_SEQUENCED_PAYLOAD,
-                    });
-                }
-                self.sequenced.push(bytes);
-                Ok(())
-            }
-            ChannelId::Unreliable => {
-                self.unreliable.push(bytes);
-                Ok(())
-            }
+        if self.out_frag.is_some() {
+            return Err(NetError::ChannelFull);
         }
+        let reliable = matches!(channel, ChannelId::ReliableOrdered);
+        let fragment_id = self.next_fragment_id;
+        self.next_fragment_id = self.next_fragment_id.wrapping_add(1);
+        self.out_frag = Some(OutboundFragmented::new(
+            bytes,
+            fragment_id,
+            channel,
+            reliable,
+        ));
+        Ok(())
     }
 
     /// Counts the unacked previous carrier of reliable message `id` as lost and
@@ -284,6 +316,7 @@ impl Connection {
         if self.send_times[ring].is_some() {
             self.stats.on_delivery(true);
             self.packet_to_msg[ring] = None;
+            self.packet_to_frag[ring] = None;
         }
         self.send_times[ring] = Some(now);
     }
@@ -315,6 +348,111 @@ impl Connection {
         self.last_send = now;
         self.stats.on_sent(total);
         Ok(seq)
+    }
+
+    /// Build and transmit one `Fragment` datagram (sub-header + piece) on `channel`.
+    #[allow(clippy::too_many_arguments)]
+    fn transmit_fragment(
+        &mut self,
+        fragment_id: u16,
+        index: usize,
+        count: usize,
+        channel: ChannelId,
+        body: &[u8],
+        scratch: &mut [u8; MAX_PACKET_SIZE],
+        now: Instant,
+        socket: &mut dyn RawSend,
+    ) -> NetResult<u16> {
+        let seq = self.endpoint.next_sequence();
+        let (ack, ack_bits) = self.endpoint.ack_header();
+        let header = PacketHeader {
+            protocol_id: PROTOCOL_ID,
+            packet_type: PacketType::Fragment,
+            sequence: seq,
+            ack,
+            ack_bits,
+            channel: channel as u8,
+        };
+        header.encode(scratch)?;
+        let fh = FragmentHeader {
+            fragment_id,
+            index: index as u16,
+            count: count as u16,
+        };
+        fh.encode(&mut scratch[HEADER_SIZE..HEADER_SIZE + FRAGMENT_HEADER_SIZE])?;
+        let body_start = HEADER_SIZE + FRAGMENT_HEADER_SIZE;
+        scratch[body_start..body_start + body.len()].copy_from_slice(body);
+        let total = body_start + body.len();
+        socket.raw_send(&scratch[..total], self.addr)?;
+        self.stamp_send_time(seq, now);
+        self.last_send = now;
+        self.stats.on_sent(total);
+        Ok(seq)
+    }
+
+    /// Advance the single in-flight fragmented message: send up to [`FRAGMENT_BURST`]
+    /// due fragments. Reliable fragments resend on timeout until acked and the message
+    /// is dropped when fully acked; best-effort fragments are sent once and the message
+    /// is dropped when every fragment has been sent.
+    fn flush_fragments(
+        &mut self,
+        scratch: &mut [u8; MAX_PACKET_SIZE],
+        now: Instant,
+        socket: &mut dyn RawSend,
+    ) -> NetResult<()> {
+        let Some(mut of) = self.out_frag.take() else {
+            return Ok(());
+        };
+        let reliable = of.is_reliable();
+        let timeout = if reliable {
+            RELIABLE_RESEND_TIMEOUT
+        } else {
+            Duration::MAX
+        };
+        let mut sent = 0usize;
+        // A transmit error must not discard the in-flight message (the reliable
+        // invariant: it completes or the connection times out). On error we stop the
+        // burst, restore `out_frag`, and propagate — the message resends next flush.
+        let mut result = Ok(());
+        for i in 0..of.count() {
+            if sent >= FRAGMENT_BURST {
+                break;
+            }
+            if of.due(i, now, timeout) {
+                match self.transmit_fragment(
+                    of.fragment_id(),
+                    i,
+                    of.count(),
+                    of.channel(),
+                    of.slice(i),
+                    scratch,
+                    now,
+                    socket,
+                ) {
+                    Ok(seq) => {
+                        of.mark_sent(i, now);
+                        if reliable {
+                            self.packet_to_frag[usize::from(seq) % 256] = Some(i as u16);
+                        }
+                        sent += 1;
+                    }
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+        }
+        let done = result.is_ok()
+            && if reliable {
+                of.all_acked()
+            } else {
+                of.all_sent()
+            };
+        if !done {
+            self.out_frag = Some(of);
+        }
+        result
     }
 
     /// Drain all queued application traffic, resend due reliable messages, and emit a
@@ -371,6 +509,8 @@ impl Connection {
             self.packet_to_msg[usize::from(seq) % 256] = Some(id);
         }
 
+        self.flush_fragments(scratch, now, socket)?;
+
         if self.keep_alive_due(now) {
             self.send_control(PacketType::KeepAlive, scratch, now, socket)?;
         }
@@ -419,6 +559,11 @@ impl Connection {
             }
             if let Some(msg_id) = self.packet_to_msg[ring].take() {
                 self.rel_send.ack(msg_id);
+            }
+            if let Some(frag_index) = self.packet_to_frag[ring].take() {
+                if let Some(of) = self.out_frag.as_mut() {
+                    of.mark_acked(usize::from(frag_index));
+                }
             }
         }
         self.acked_scratch = scratch;
@@ -477,6 +622,41 @@ impl Connection {
         }
     }
 
+    /// Process an inbound `Fragment` datagram. `payload` is the body after the 14-byte
+    /// header (a 6-byte fragment sub-header plus the piece). On the fragment that
+    /// completes the message, the reassembled bytes are copied into `arena` and
+    /// surfaced as a `Message` on the original channel; otherwise nothing surfaces.
+    pub fn on_fragment(
+        &mut self,
+        header: &PacketHeader,
+        payload: &[u8],
+        arena: &mut Vec<u8>,
+        now: Instant,
+    ) -> Incoming {
+        self.endpoint.on_received(header.sequence);
+        self.process_acks(header.ack, header.ack_bits, now);
+
+        let Ok(fh) = FragmentHeader::decode(payload) else {
+            return Incoming::None;
+        };
+        let Ok(channel) = ChannelId::try_from(header.channel) else {
+            return Incoming::None;
+        };
+        let body = &payload[FRAGMENT_HEADER_SIZE..];
+        match self.reassembler.accept(channel, fh, body, now) {
+            Some(Reassembled { slot, channel, len }) => {
+                let offset = arena.len();
+                arena.extend_from_slice(self.reassembler.bytes(slot));
+                Incoming::Message {
+                    channel,
+                    offset,
+                    len,
+                }
+            }
+            None => Incoming::None,
+        }
+    }
+
     /// Pop the next in-order reliable message into `arena`, if available.
     pub fn drain_reliable(&mut self, arena: &mut Vec<u8>) -> Option<(usize, usize)> {
         let mut out = None;
@@ -499,4 +679,41 @@ impl Connection {
 /// owner (server/client) controls the actual `UdpSocket`.
 pub(crate) trait RawSend {
     fn raw_send(&mut self, bytes: &[u8], addr: SocketAddr) -> NetResult<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::MAX_PAYLOAD_SIZE;
+
+    struct FailSink;
+    impl RawSend for FailSink {
+        fn raw_send(&mut self, _bytes: &[u8], _addr: SocketAddr) -> NetResult<()> {
+            Err(NetError::Io(std::io::Error::other("transmit failure")))
+        }
+    }
+
+    fn conn() -> Connection {
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        Connection::new(addr, ClientId(1), 0x1234_5678, Instant::now())
+    }
+
+    #[test]
+    fn transmit_error_preserves_in_flight_fragmented_message() {
+        let mut c = conn();
+        // Stage a reliable message larger than one datagram → fragmented, held in flight.
+        let msg = vec![7u8; MAX_PAYLOAD_SIZE * 2];
+        c.enqueue(ChannelId::ReliableOrdered, &msg).unwrap();
+
+        // A failing transmit propagates the error but must NOT discard the message.
+        let mut scratch = [0u8; MAX_PACKET_SIZE];
+        let mut sink = FailSink;
+        assert!(c.flush(&mut scratch, Instant::now(), &mut sink).is_err());
+
+        // The in-flight slot is still occupied: a second large enqueue is refused.
+        assert!(matches!(
+            c.enqueue(ChannelId::ReliableOrdered, &msg),
+            Err(NetError::ChannelFull)
+        ));
+    }
 }

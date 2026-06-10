@@ -65,6 +65,7 @@ pub enum PacketType {
     KeepAlive = 5,
     Payload = 6,
     Disconnect = 7,
+    Fragment = 8,
 }
 
 impl TryFrom<u8> for PacketType {
@@ -80,6 +81,7 @@ impl TryFrom<u8> for PacketType {
             5 => Ok(Self::KeepAlive),
             6 => Ok(Self::Payload),
             7 => Ok(Self::Disconnect),
+            8 => Ok(Self::Fragment),
             _ => Err(NetError::MalformedPacket),
         }
     }
@@ -160,6 +162,7 @@ mod tests {
             PacketType::KeepAlive,
             PacketType::Payload,
             PacketType::Disconnect,
+            PacketType::Fragment,
         ];
         for t in types {
             roundtrip(PacketHeader {
@@ -237,6 +240,7 @@ mod tests {
     #[test]
     fn packet_type_try_from() {
         assert_eq!(PacketType::try_from(6).unwrap(), PacketType::Payload);
-        assert!(PacketType::try_from(8).is_err());
+        assert_eq!(PacketType::try_from(8).unwrap(), PacketType::Fragment);
+        assert!(PacketType::try_from(9).is_err());
     }
 }

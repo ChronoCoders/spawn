@@ -10,6 +10,7 @@ use crate::connection::{
 };
 use crate::error::{NetError, NetResult};
 use crate::event::{ClientId, EventRecord, NetEventIter};
+use crate::frag::MAX_FRAGMENTED_PAYLOAD;
 use crate::protocol::{
     control_layout, PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE,
     PROTOCOL_ID,
@@ -159,6 +160,9 @@ impl Server {
             }
             PacketType::KeepAlive => {
                 self.on_connected_packet(header, from, len, payload_start, now, true)?
+            }
+            PacketType::Fragment => {
+                self.on_fragment_packet(header, from, len, payload_start, now)?
             }
             PacketType::Disconnect => self.on_disconnect_packet(from, len),
             // Server never receives Challenge/ConnectAccepted/ConnectDenied.
@@ -323,6 +327,41 @@ impl Server {
         Ok(())
     }
 
+    fn on_fragment_packet(
+        &mut self,
+        header: PacketHeader,
+        from: SocketAddr,
+        len: usize,
+        payload_start: usize,
+        now: Instant,
+    ) -> NetResult<()> {
+        let Some(slot) = self.slot_index_of(from) else {
+            return Ok(());
+        };
+        let Slot::Connected(conn) = &mut self.slots[slot] else {
+            return Ok(());
+        };
+        conn.mark_recv(now, len);
+        let client = conn.client_id;
+        let payload_len = len - payload_start;
+        let mut tmp = [0u8; MAX_PAYLOAD_SIZE];
+        tmp[..payload_len].copy_from_slice(&self.recv_buf[payload_start..len]);
+        if let Incoming::Message {
+            channel,
+            offset,
+            len,
+        } = conn.on_fragment(&header, &tmp[..payload_len], &mut self.arena, now)
+        {
+            self.events.push(EventRecord::Message {
+                client,
+                channel,
+                offset,
+                len,
+            });
+        }
+        Ok(())
+    }
+
     fn on_disconnect_packet(&mut self, from: SocketAddr, len: usize) {
         if len < HEADER_SIZE + control_layout::DISCONNECT_LEN {
             return;
@@ -450,10 +489,10 @@ impl Server {
     /// Queue `bytes` to `client` on `channel`. Errors: `NoSuchClient`, `PayloadTooLarge`,
     /// `ChannelFull` (reliable backpressure — the message is never silently dropped).
     pub fn send(&mut self, client: ClientId, channel: ChannelId, bytes: &[u8]) -> NetResult<()> {
-        if bytes.len() > MAX_PAYLOAD_SIZE {
+        if bytes.len() > MAX_FRAGMENTED_PAYLOAD {
             return Err(NetError::PayloadTooLarge {
                 size: bytes.len(),
-                max: MAX_PAYLOAD_SIZE,
+                max: MAX_FRAGMENTED_PAYLOAD,
             });
         }
         for slot in self.slots.iter_mut() {
@@ -469,10 +508,10 @@ impl Server {
     /// Send to every connected client. A per-client `ChannelFull` is returned as `Err`
     /// for the first failing client; the others still receive the message.
     pub fn broadcast(&mut self, channel: ChannelId, bytes: &[u8]) -> NetResult<()> {
-        if bytes.len() > MAX_PAYLOAD_SIZE {
+        if bytes.len() > MAX_FRAGMENTED_PAYLOAD {
             return Err(NetError::PayloadTooLarge {
                 size: bytes.len(),
-                max: MAX_PAYLOAD_SIZE,
+                max: MAX_FRAGMENTED_PAYLOAD,
             });
         }
         let mut first_err = None;

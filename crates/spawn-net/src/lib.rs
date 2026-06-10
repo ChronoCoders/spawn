@@ -14,6 +14,7 @@ pub mod client;
 pub mod connection;
 pub mod error;
 pub mod event;
+pub mod frag;
 pub mod protocol;
 pub mod sequence;
 pub mod server;
@@ -28,6 +29,9 @@ pub use connection::{
 };
 pub use error::{NetError, NetResult};
 pub use event::{ClientId, NetEvent, NetEventIter};
+pub use frag::{
+    FragmentHeader, FRAGMENT_HEADER_SIZE, FRAGMENT_PAYLOAD, MAX_FRAGMENTED_PAYLOAD, MAX_FRAGMENTS,
+};
 pub use protocol::{
     PacketHeader, PacketType, ACK_BITS, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE, PROTOCOL_ID,
 };

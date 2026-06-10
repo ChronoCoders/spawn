@@ -11,8 +11,15 @@ use std::time::{Duration, Instant};
 
 use spawn_net::{
     ChannelId, Client, ClientState, DenyReason, DisconnectReason, NetEvent, Server, ServerConfig,
-    MAX_PAYLOAD_SIZE,
+    MAX_FRAGMENTED_PAYLOAD, MAX_PAYLOAD_SIZE,
 };
+
+/// A deterministic, patterned blob of `n` bytes for fragmentation round-trips.
+fn blob(n: usize) -> Vec<u8> {
+    (0..n)
+        .map(|i| (i.wrapping_mul(31).wrapping_add(7)) as u8)
+        .collect()
+}
 
 fn server_on(max_clients: usize) -> Server {
     let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -201,12 +208,17 @@ fn oversize_payload_rejected() {
     let max = vec![1u8; MAX_PAYLOAD_SIZE];
     assert!(client.send(ChannelId::Unreliable, &max).is_ok());
 
-    let over = vec![1u8; MAX_PAYLOAD_SIZE + 1];
+    // Above the single-datagram limit the message now fragments rather than erroring.
+    let fragmented = vec![1u8; MAX_PAYLOAD_SIZE + 1];
+    assert!(client.send(ChannelId::Unreliable, &fragmented).is_ok());
+
+    // Only beyond the fragmented ceiling is the message rejected.
+    let over = vec![1u8; MAX_FRAGMENTED_PAYLOAD + 1];
     let err = client.send(ChannelId::Unreliable, &over).unwrap_err();
     assert!(matches!(
         err,
         spawn_net::NetError::PayloadTooLarge {
-            max: MAX_PAYLOAD_SIZE,
+            max: MAX_FRAGMENTED_PAYLOAD,
             ..
         }
     ));
@@ -730,4 +742,169 @@ fn correct_keepalive_refreshes_timeout() {
         1,
         "connection should remain alive under correct-salt KeepAlive"
     );
+}
+
+#[test]
+fn fragmented_unreliable_delivers_intact() {
+    let mut server = server_on(4);
+    let mut client = Client::new().unwrap();
+    connect(&mut server, &mut client);
+
+    // > MAX_PAYLOAD_SIZE forces fragmentation across several datagrams.
+    let msg = blob(3000);
+    assert!(msg.len() > MAX_PAYLOAD_SIZE);
+    server
+        .broadcast(ChannelId::UnreliableSequenced, &msg)
+        .unwrap();
+
+    let mut got: Option<Vec<u8>> = None;
+    pump(
+        &mut server,
+        &mut client,
+        40,
+        |_| {},
+        |ev| {
+            if let NetEvent::Message { channel, bytes, .. } = ev {
+                assert_eq!(channel, ChannelId::UnreliableSequenced);
+                got = Some(bytes.to_vec());
+            }
+        },
+    );
+    assert_eq!(
+        got.as_deref(),
+        Some(msg.as_slice()),
+        "fragmented unreliable message reassembles intact over lossless loopback"
+    );
+}
+
+#[test]
+fn fragmented_reliable_delivers_intact() {
+    let mut server = server_on(4);
+    let mut client = Client::new().unwrap();
+    connect(&mut server, &mut client);
+
+    let msg = blob(5000); // ~5 fragments
+    server.broadcast(ChannelId::ReliableOrdered, &msg).unwrap();
+
+    let mut got: Option<Vec<u8>> = None;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let _ = server.poll().unwrap().count();
+        for ev in client.poll().unwrap() {
+            if let NetEvent::Message { channel, bytes, .. } = ev {
+                assert_eq!(channel, ChannelId::ReliableOrdered);
+                got = Some(bytes.to_vec());
+            }
+        }
+        if got.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(got.as_deref(), Some(msg.as_slice()));
+}
+
+#[test]
+fn fragmented_reliable_delivers_intact_under_drop() {
+    let mut server = server_on(4);
+    let saddr = server.local_addr().unwrap();
+    let mut proxy = DropProxy::new(saddr, 3); // drop every 3rd datagram each way
+    let proxy_addr = proxy.front_addr();
+
+    let mut client = Client::new().unwrap();
+    client.connect(proxy_addr).unwrap();
+
+    let mut connected = false;
+    for _ in 0..300 {
+        proxy.pump();
+        let _ = server.poll().unwrap().count();
+        proxy.pump();
+        for ev in client.poll().unwrap() {
+            if let NetEvent::Connected { .. } = ev {
+                connected = true;
+            }
+        }
+        if connected {
+            break;
+        }
+    }
+    assert!(connected, "handshake failed under drop");
+
+    let msg = blob(6000); // ~6 fragments; some dropped, resent until complete
+    server.broadcast(ChannelId::ReliableOrdered, &msg).unwrap();
+
+    let mut got: Option<Vec<u8>> = None;
+    let mut deliveries = 0usize;
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while Instant::now() < deadline {
+        proxy.pump();
+        let _ = server.poll().unwrap().count();
+        proxy.pump();
+        for ev in client.poll().unwrap() {
+            if let NetEvent::Message { channel, bytes, .. } = ev {
+                assert_eq!(channel, ChannelId::ReliableOrdered);
+                got = Some(bytes.to_vec());
+                deliveries += 1;
+            }
+        }
+        // Keep pumping a little past first delivery to prove no double-delivery from
+        // the sender's continued resends of the same fragment id.
+        if deliveries > 0 && Instant::now() + Duration::from_millis(400) < deadline {
+            for _ in 0..50 {
+                proxy.pump();
+                let _ = server.poll().unwrap().count();
+                proxy.pump();
+                for ev in client.poll().unwrap() {
+                    if let NetEvent::Message { .. } = ev {
+                        deliveries += 1;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        got.as_deref(),
+        Some(msg.as_slice()),
+        "reliable fragmented message arrives intact under loss"
+    );
+    assert_eq!(
+        deliveries, 1,
+        "reliable fragmented message delivered exactly once"
+    );
+}
+
+#[test]
+fn fragmented_backpressure_and_ceiling() {
+    let mut server = server_on(4);
+    let mut client = Client::new().unwrap();
+    connect(&mut server, &mut client);
+
+    // A second in-flight reliable fragmented message before the first completes is
+    // refused with ChannelFull (single in-flight per connection).
+    server
+        .broadcast(ChannelId::ReliableOrdered, &blob(5000))
+        .unwrap();
+    let saddr_clients: Vec<_> = (0..16)
+        .filter(|&i| server.stats(spawn_net::ClientId(i)).is_some())
+        .map(spawn_net::ClientId)
+        .collect();
+    let cid = *saddr_clients.first().expect("one connected client");
+    let err = server
+        .send(cid, ChannelId::ReliableOrdered, &blob(5000))
+        .unwrap_err();
+    assert!(matches!(err, spawn_net::NetError::ChannelFull));
+
+    // Above the fragmented ceiling → PayloadTooLarge with the fragmented max.
+    let over = vec![0u8; MAX_FRAGMENTED_PAYLOAD + 1];
+    let err = server.send(cid, ChannelId::Unreliable, &over).unwrap_err();
+    assert!(matches!(
+        err,
+        spawn_net::NetError::PayloadTooLarge {
+            max: MAX_FRAGMENTED_PAYLOAD,
+            ..
+        }
+    ));
 }

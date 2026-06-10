@@ -10,6 +10,7 @@ use crate::connection::{
 };
 use crate::error::{NetError, NetResult};
 use crate::event::{ClientId, EventRecord, NetEventIter};
+use crate::frag::MAX_FRAGMENTED_PAYLOAD;
 use crate::protocol::{
     control_layout, PacketHeader, PacketType, HEADER_SIZE, MAX_PACKET_SIZE, MAX_PAYLOAD_SIZE,
     PROTOCOL_ID,
@@ -174,6 +175,7 @@ impl Client {
             PacketType::ConnectAccepted => self.on_accepted(len, now),
             PacketType::ConnectDenied => self.on_denied(len),
             PacketType::Payload => self.on_payload(header, len, now),
+            PacketType::Fragment => self.on_fragment(header, len, now),
             PacketType::KeepAlive => self.on_keep_alive(header, len, now),
             PacketType::Disconnect => self.on_disconnect(len),
             _ => {}
@@ -275,6 +277,30 @@ impl Client {
                     len: mlen,
                 });
             }
+        }
+    }
+
+    fn on_fragment(&mut self, header: PacketHeader, len: usize, now: Instant) {
+        let Some(conn) = &mut self.conn else {
+            return;
+        };
+        conn.mark_recv(now, len);
+        let client = conn.client_id;
+        let payload_len = len - HEADER_SIZE;
+        let mut tmp = [0u8; MAX_PAYLOAD_SIZE];
+        tmp[..payload_len].copy_from_slice(&self.recv_buf[HEADER_SIZE..len]);
+        if let Incoming::Message {
+            channel,
+            offset,
+            len,
+        } = conn.on_fragment(&header, &tmp[..payload_len], &mut self.arena, now)
+        {
+            self.events.push(EventRecord::Message {
+                client,
+                channel,
+                offset,
+                len,
+            });
         }
     }
 
@@ -421,10 +447,10 @@ impl Client {
         if self.state != ClientState::Connected {
             return Err(NetError::NotConnected);
         }
-        if bytes.len() > MAX_PAYLOAD_SIZE {
+        if bytes.len() > MAX_FRAGMENTED_PAYLOAD {
             return Err(NetError::PayloadTooLarge {
                 size: bytes.len(),
-                max: MAX_PAYLOAD_SIZE,
+                max: MAX_FRAGMENTED_PAYLOAD,
             });
         }
         match &mut self.conn {
