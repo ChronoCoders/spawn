@@ -2510,6 +2510,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spawn-replication"
+version = "0.1.0"
+dependencies = [
+ "spawn-core",
+ "spawn-ecs",
+ "spawn-net",
+ "spawn-serialize",
+]
+
+[[package]]
 name = "spawn-script"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,14 @@
+[package]
+name = "spawn-replication"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spawn-core = { path = "../spawn-core", version = "0.1.0" }
+spawn-ecs = { path = "../spawn-ecs", version = "0.1.0" }
+spawn-net = { path = "../spawn-net", version = "0.1.0" }
+spawn-serialize = { path = "../spawn-serialize", version = "0.1.0" }
