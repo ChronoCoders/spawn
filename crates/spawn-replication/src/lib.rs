@@ -18,6 +18,7 @@ pub mod id;
 pub mod interest;
 pub mod interp;
 pub mod markers;
+pub mod predict;
 pub mod registry;
 pub mod role;
 pub mod snapshot;
@@ -30,6 +31,7 @@ pub use id::{ReplId, ReplIdMap};
 pub use interest::{ReplicationVisibility, VisibilityConfig};
 pub use interp::{default_interp_delay, InterpBuffer, InterpolatedTransform};
 pub use markers::{AlwaysRelevant, OwnerOnly, Replicated, StaticRelevant};
+pub use predict::{replay, InputBuffer, Predicted, PredictionSmoother, SMOOTH_DECAY, SNAP_EPSILON};
 pub use registry::{ReplComponentId, Replicate, ReplicationRegistry};
 pub use role::NetRole;
 pub use snapshot::{
