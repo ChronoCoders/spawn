@@ -11,7 +11,7 @@
 
 Rust game engine with archetype ECS, wgpu rendering, Rapier physics, and Lua scripting.
 
-**Status:** v0.1.0 — Phase 1 complete. All 14 crates implement their core APIs against written specifications, with 639 tests across the workspace. The engine integration loop, visual editor, and rollback netcode are Phase 2. Release notes: [v0.1.0 GitHub release](https://github.com/ChronoCoders/spawn/releases/tag/v0.1.0).
+**Status:** v0.2.0 — Phase 2 complete. All 18 crates implement their core APIs against written specifications, with 851 tests across the workspace. Phase 2 added the engine integration loop, render-graph derivation with directional lighting and shadows, the visual editor, and server-authoritative netcode. Release notes: [v0.2.0 GitHub release](https://github.com/ChronoCoders/spawn/releases/tag/v0.2.0).
 
 ## Workspace
 
@@ -25,9 +25,13 @@ Rust game engine with archetype ECS, wgpu rendering, Rapier physics, and Lua scr
 | [`spawn-asset`](crates/spawn-asset/) | Async loading, typed handles, day-one hot-reload via Arc-swap. |
 | [`spawn-audio`](crates/spawn-audio/) | kira mixer: buses, spatial attenuation/panning, null-device fallback. |
 | [`spawn-physics`](crates/spawn-physics/) | Rapier 2D/3D behind `dim2`/`dim3` features, fixed-step, ECS sync. |
+| [`spawn-engine`](crates/spawn-engine/) | Integration loop: frame pipeline, fixed-step accumulator, frontend/backend proxy split with low-latency sync. |
 | [`spawn-script`](crates/spawn-script/) | Sandboxed Lua 5.4 (mlua): instruction budgets, memory caps, typed bridge. |
 | [`spawn-editor`](crates/spawn-editor/) | Headless editor framework: undo/redo command stack, selection, gizmo math. |
+| [`spawn-editor-shell`](crates/spawn-editor-shell/) | Visual editor: scene view, reflection inspector, translate/rotate/scale gizmos, Edit/Play. |
 | [`spawn-net`](crates/spawn-net/) | UDP transport: byte-precise protocol, salt handshake, reliable channels. |
+| [`spawn-serialize`](crates/spawn-serialize/) | Bit-level serialization codec: read/write-symmetric streams, quantization, smallest-three quaternions. |
+| [`spawn-replication`](crates/spawn-replication/) | Server-authoritative netcode: interest management, acked-baseline delta snapshots, interpolation, prediction, RPC. |
 | [`spawn-ui`](crates/spawn-ui/) | Retained flexbox-subset UI: incremental layout, hit testing, draw list. |
 | [`spawn-debug`](crates/spawn-debug/) | Logging, frame profiler, metrics, overlay data model. Zero deps. |
 | [`spawn-build`](crates/spawn-build/) | Asset compiler: manifest, content hashing, incremental, deterministic pack index. |
