@@ -39,6 +39,12 @@ pub enum ReplError {
         /// Failure-class context.
         context: &'static str,
     },
+    /// A `spawn-net` transport error surfaced while sending/polling (the underlying
+    /// `NetError` is not retained — it is not `Copy` — only the failure class).
+    Transport {
+        /// Failure-class context.
+        context: &'static str,
+    },
 }
 
 /// Result alias for fallible replication operations.
@@ -60,6 +66,7 @@ impl fmt::Display for ReplError {
             Self::Component { context } => write!(f, "{context}"),
             Self::Desync { context } => write!(f, "{context}"),
             Self::Rpc { context } => write!(f, "{context}"),
+            Self::Transport { context } => write!(f, "{context}"),
         }
     }
 }
@@ -76,6 +83,7 @@ impl From<ReplError> for SpawnError {
             ReplError::Component { context } => SpawnError::InvalidState { context },
             ReplError::Desync { context } => SpawnError::InvalidState { context },
             ReplError::Rpc { context } => SpawnError::InvalidState { context },
+            ReplError::Transport { context } => SpawnError::InvalidState { context },
         }
     }
 }

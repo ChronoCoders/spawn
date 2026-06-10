@@ -36,6 +36,27 @@ pub const SNAPSHOT_HISTORY: usize = 32;
 /// component larger than this yields a clean `EndOfStream` error, not a panic.
 const COMPONENT_SCRATCH: usize = 256;
 
+/// Upper bound on a spawn's `ReplId` accepted from the wire. The server keeps the id
+/// space dense (it tracks peak concurrent live), so a legitimate id is far below this;
+/// the cap stops a malformed/hostile snapshot from driving an unbounded client-side
+/// `ReplIdMap` allocation (a `ReplId` near `u32::MAX` would otherwise grow the id table
+/// to multiple GB).
+const MAX_SPAWN_REPL_ID: u32 = 1 << 20;
+
+/// Peek a snapshot's tick and the baseline tick it was encoded against, without
+/// decoding the body — the client uses the baseline tick to select the baseline state
+/// to pass to [`decode_snapshot`].
+pub fn peek_snapshot_header(input: &[u8]) -> ReplResult<(u32, Option<u32>)> {
+    let mut r = BitReader::new(input);
+    let tick = r.read_bits(32)? as u32;
+    let baseline_tick = if r.read_bool()? {
+        Some(r.read_bits(32)? as u32)
+    } else {
+        None
+    };
+    Ok((tick, baseline_tick))
+}
+
 /// One tick's recorded absolute component bytes, keyed by `(ReplId, ReplComponentId)`.
 /// A peer keeps a ring of these as candidate delta baselines.
 #[derive(Default)]
@@ -203,8 +224,10 @@ fn encode_entity(
 
 /// Encode one client's snapshot into `out`. `spawns` carry full state; `updates` carry
 /// deltas against `baseline` and are packed in the given (priority) order until the
-/// running size reaches `budget_bytes`. Returns the bytes written and the recorded
-/// current [`SnapshotState`] (the next baseline for the ring).
+/// running size reaches `budget_bytes`. Returns the bytes written, the recorded current
+/// [`SnapshotState`] (the next baseline for the ring), and how many `updates` were
+/// actually written before the budget cut them off (so the caller's priority
+/// accumulator can reset only the entities that were sent).
 #[allow(clippy::too_many_arguments)]
 pub fn encode_snapshot(
     registry: &ReplicationRegistry,
@@ -219,7 +242,7 @@ pub fn encode_snapshot(
     despawns: &[ReplId],
     updates: &[ReplId],
     budget_bytes: usize,
-) -> ReplResult<(usize, SnapshotState)> {
+) -> ReplResult<(usize, SnapshotState, usize)> {
     let mut new_state = SnapshotState::default();
     let mut scratch = Vec::new();
     let mut bw = BitWriter::new(out);
@@ -262,6 +285,7 @@ pub fn encode_snapshot(
     bw.write_bool(false)?;
 
     // Updates (delta, budget-limited by the running byte count).
+    let mut updates_written = 0usize;
     for &id in updates {
         if bw.bits_written().div_ceil(8) >= budget_bytes {
             break;
@@ -281,11 +305,12 @@ pub fn encode_snapshot(
             &mut new_state,
             &mut scratch,
         )?;
+        updates_written += 1;
     }
     bw.write_bool(false)?;
 
     let n = bw.finish();
-    Ok((n, new_state))
+    Ok((n, new_state, updates_written))
 }
 
 /// The result of decoding a snapshot (after it has been applied to the world).
@@ -365,6 +390,11 @@ pub fn decode_snapshot(
     // Spawns: materialise a local entity, bind the id, apply absolute components.
     while r.read_bool()? {
         let id = ReplId(r.read_bits(32)? as u32);
+        if id.0 >= MAX_SPAWN_REPL_ID {
+            return Err(ReplError::Desync {
+                context: "decode: spawn id out of range",
+            });
+        }
         let entity = match ids.entity(id) {
             Some(e) => e,
             None => {
@@ -435,7 +465,7 @@ mod tests {
         let id = ids.allocate(e);
 
         let mut out = [0u8; 256];
-        let (n, _state) = encode_snapshot(
+        let (n, _state, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,
@@ -481,7 +511,7 @@ mod tests {
 
         // Tick 1: spawn (absolute). Capture both sides' baseline states.
         let mut out = [0u8; 256];
-        let (n, server_base) = encode_snapshot(
+        let (n, server_base, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,
@@ -508,7 +538,7 @@ mod tests {
 
         // Tick 2: an update delta vs the baseline.
         let mut delta_buf = [0u8; 256];
-        let (dn, _) = encode_snapshot(
+        let (dn, _, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,
@@ -590,7 +620,7 @@ mod tests {
         let id = ids.allocate(e);
 
         let mut out = [0u8; 256];
-        let (n, _) = encode_snapshot(
+        let (n, _, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,
@@ -613,7 +643,7 @@ mod tests {
 
         // Tick 2: despawn it.
         let mut out2 = [0u8; 64];
-        let (n2, _) = encode_snapshot(
+        let (n2, _, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,
@@ -655,7 +685,7 @@ mod tests {
 
         // Spawn all on the client first.
         let mut out = [0u8; 1024];
-        let (n, server_base) = encode_snapshot(
+        let (n, server_base, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,
@@ -683,7 +713,7 @@ mod tests {
         }
         let mut ub = [0u8; 1024];
         let tiny_budget = 24usize;
-        let (un, _) = encode_snapshot(
+        let (un, _, _) = encode_snapshot(
             &sr,
             &sw,
             &ids,

@@ -13,6 +13,8 @@
 //! This first module set establishes the identity and classification layer: the dense
 //! [`ReplId`] space, the relevancy [`markers`], and the derived [`NetRole`] triad.
 
+pub mod client;
+pub mod config;
 pub mod error;
 pub mod id;
 pub mod interest;
@@ -22,7 +24,9 @@ pub mod predict;
 pub mod registry;
 pub mod role;
 pub mod rpc;
+pub mod server;
 pub mod snapshot;
+mod wire;
 
 #[cfg(test)]
 mod testcomp;
@@ -40,6 +44,10 @@ pub use rpc::{
     RpcKind, RpcRegistry,
 };
 pub use snapshot::{
-    decode_snapshot, encode_snapshot, DecodeOutcome, SnapshotState, SEND_BUDGET_BYTES,
-    SNAPSHOT_HISTORY, SNAPSHOT_HZ, SNAPSHOT_INTERVAL,
+    decode_snapshot, encode_snapshot, peek_snapshot_header, DecodeOutcome, SnapshotState,
+    SEND_BUDGET_BYTES, SNAPSHOT_HISTORY, SNAPSHOT_HZ, SNAPSHOT_INTERVAL,
 };
+
+pub use client::{ClientEvents, ClientRpc, ReplicationClient};
+pub use config::ReplicationConfig;
+pub use server::{Replicator, ServerEvents, ServerInput, ServerRpc};

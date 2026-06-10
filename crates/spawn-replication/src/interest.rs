@@ -354,6 +354,23 @@ impl ReplicationVisibility {
         self.slot(client)
             .is_some_and(|s| s.previous.get(id.index()))
     }
+
+    /// Collect the ids currently visible to `client` into `out` (cleared first). Used by
+    /// the server driver to derive the per-client update set (visible minus spawns).
+    pub fn visible_into(&self, client: ClientId, out: &mut Vec<ReplId>) {
+        out.clear();
+        let Some(slot) = self.slot(client) else {
+            return;
+        };
+        for (w, &word) in slot.previous.words.iter().enumerate() {
+            let mut bits = word;
+            while bits != 0 {
+                let b = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                out.push(ReplId((w * 64 + b) as u32));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

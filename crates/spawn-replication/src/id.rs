@@ -120,6 +120,12 @@ impl ReplIdMap {
         self.entity_of.get(id.index()).copied().flatten()
     }
 
+    /// Iterate the live `(Entity, ReplId)` bindings (unordered). Used by the server
+    /// driver to detect entities that left replication.
+    pub fn entities(&self) -> impl Iterator<Item = (Entity, ReplId)> + '_ {
+        self.id_of.iter().map(|(&e, &id)| (e, id))
+    }
+
     /// The id-space high-water mark — the count to size `ReplId`-indexed bitsets to.
     pub fn capacity(&self) -> usize {
         self.entity_of.len()
