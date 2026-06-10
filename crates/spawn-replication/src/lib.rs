@@ -14,9 +14,11 @@
 //! [`ReplId`] space, the relevancy [`markers`], and the derived [`NetRole`] triad.
 
 pub mod id;
+pub mod interest;
 pub mod markers;
 pub mod role;
 
 pub use id::{ReplId, ReplIdMap};
+pub use interest::{ReplicationVisibility, VisibilityConfig};
 pub use markers::{AlwaysRelevant, OwnerOnly, Replicated, StaticRelevant};
 pub use role::NetRole;
