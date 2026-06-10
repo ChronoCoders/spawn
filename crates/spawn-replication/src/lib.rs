@@ -13,12 +13,24 @@
 //! This first module set establishes the identity and classification layer: the dense
 //! [`ReplId`] space, the relevancy [`markers`], and the derived [`NetRole`] triad.
 
+pub mod error;
 pub mod id;
 pub mod interest;
 pub mod markers;
+pub mod registry;
 pub mod role;
+pub mod snapshot;
 
+#[cfg(test)]
+mod testcomp;
+
+pub use error::{ReplError, ReplResult};
 pub use id::{ReplId, ReplIdMap};
 pub use interest::{ReplicationVisibility, VisibilityConfig};
 pub use markers::{AlwaysRelevant, OwnerOnly, Replicated, StaticRelevant};
+pub use registry::{ReplComponentId, Replicate, ReplicationRegistry};
 pub use role::NetRole;
+pub use snapshot::{
+    decode_snapshot, encode_snapshot, DecodeOutcome, SnapshotState, SEND_BUDGET_BYTES,
+    SNAPSHOT_HISTORY, SNAPSHOT_HZ, SNAPSHOT_INTERVAL,
+};
