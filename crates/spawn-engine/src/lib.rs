@@ -9,6 +9,7 @@
 //! proxies (no shared lock spans the pipeline).
 
 mod app;
+mod audio;
 mod config;
 mod engine;
 mod error;
@@ -18,6 +19,7 @@ mod render;
 mod time;
 
 pub use app::App;
+pub use audio::{AudioCommand, AudioCommands};
 pub use config::EngineConfig;
 pub use engine::Engine;
 pub use error::{EngineError, EngineResult};

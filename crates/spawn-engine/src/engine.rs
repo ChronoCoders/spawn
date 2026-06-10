@@ -17,6 +17,7 @@ use spawn_input::InputState;
 use spawn_platform::PlatformEvent;
 use spawn_render::SurfaceSize;
 
+use crate::audio::AudioCommands;
 use crate::config::EngineConfig;
 use crate::error::EngineResult;
 use crate::input::InputFrame;
@@ -50,6 +51,7 @@ pub(crate) struct EngineParts {
     /// backend's resource registry. The headless path has no renderer and ignores
     /// them.
     pub render_setups: Vec<crate::render::RenderSetup>,
+    pub audio_setups: Vec<crate::audio::AudioSetup>,
     pub config: EngineConfig,
 }
 
@@ -93,15 +95,13 @@ impl Engine {
             // Render-setup hooks are consumed by the windowed driver before
             // assemble; the headless path has no renderer to run them against.
             render_setups: _,
+            audio_setups,
             config,
         } = parts;
 
         let input = InputState::new()?;
         let audio = AudioEngine::new(AudioConfig::default())?;
-        // Root at the current directory (always present) with hot-reload off: 2a
-        // loads no assets, so this only needs to construct cleanly without
-        // depending on an `assets/` directory existing.
-        let assets = AssetServer::new(AssetServerConfig {
+        let mut assets = AssetServer::new(AssetServerConfig {
             root: ".".into(),
             hot_reload: false,
             ..Default::default()
@@ -110,6 +110,11 @@ impl Engine {
         let time = Time::new(config.fixed_timestep);
         world.insert_resource(time);
         world.insert_resource(InputFrame::snapshot(&input));
+        world.insert_resource(AudioCommands::new());
+
+        for setup in audio_setups {
+            setup(&mut assets, &mut world)?;
+        }
 
         // Startup runs once without an event swap, so first-frame readers still
         // see any events startup produced.
@@ -210,6 +215,15 @@ impl Engine {
         self.proxies.advance(mode);
 
         // 9. Audio pump.
+        if let Some(mut commands) = self.world.get_resource_mut::<AudioCommands>() {
+            if !commands.is_empty() {
+                for command in commands.drain() {
+                    let _ = self
+                        .audio
+                        .play(&command.source, command.params, &self.assets);
+                }
+            }
+        }
         self.audio.update(dt)?;
 
         Ok(())

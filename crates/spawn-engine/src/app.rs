@@ -28,6 +28,7 @@ pub struct App {
     fixed_hooks: Vec<crate::engine::FixedHook>,
     extracts: Vec<crate::engine::ExtractFn>,
     render_setups: Vec<crate::render::RenderSetup>,
+    audio_setups: Vec<crate::audio::AudioSetup>,
     config: EngineConfig,
 }
 
@@ -55,6 +56,7 @@ impl App {
             fixed_hooks: Vec::new(),
             extracts: Vec::new(),
             render_setups: Vec::new(),
+            audio_setups: Vec::new(),
             config: EngineConfig::default(),
         }
     }
@@ -139,6 +141,17 @@ impl App {
         self
     }
 
+    /// Registers an audio-setup hook run once at assembly: register the audio loader,
+    /// load clips through the asset server, and stash their handles in a world resource
+    /// for systems to enqueue against [`AudioCommands`](crate::AudioCommands).
+    pub fn add_audio_setup<F>(&mut self, setup: F) -> &mut Self
+    where
+        F: FnOnce(&mut spawn_asset::AssetServer, &mut World) -> EngineResult<()> + 'static,
+    {
+        self.audio_setups.push(Box::new(setup));
+        self
+    }
+
     /// Replaces the engine configuration.
     pub fn set_config(&mut self, config: EngineConfig) -> &mut Self {
         self.config = config;
@@ -220,6 +233,7 @@ impl App {
             fixed_hooks: self.fixed_hooks,
             extracts: self.extracts,
             render_setups: self.render_setups,
+            audio_setups: self.audio_setups,
             config: self.config,
         }
     }
