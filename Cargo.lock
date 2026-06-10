@@ -2519,6 +2519,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "spawn-serialize"
+version = "0.1.0"
+dependencies = [
+ "spawn-core",
+]
+
+[[package]]
 name = "spawn-ui"
 version = "0.1.0"
 dependencies = [

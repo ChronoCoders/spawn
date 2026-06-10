@@ -12,6 +12,7 @@ members = [
     "crates/spawn-script",
     "crates/spawn-editor",
     "crates/spawn-net",
+    "crates/spawn-serialize",
     "crates/spawn-ui",
     "crates/spawn-debug",
     "crates/spawn-build",
