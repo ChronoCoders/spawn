@@ -33,6 +33,12 @@ pub enum ReplError {
         /// Failure-class context.
         context: &'static str,
     },
+    /// A malformed or unauthorized RPC (bad kind on the wire, unregistered id, or a
+    /// server RPC on an entity the sender does not own).
+    Rpc {
+        /// Failure-class context.
+        context: &'static str,
+    },
 }
 
 /// Result alias for fallible replication operations.
@@ -53,6 +59,7 @@ impl fmt::Display for ReplError {
             }
             Self::Component { context } => write!(f, "{context}"),
             Self::Desync { context } => write!(f, "{context}"),
+            Self::Rpc { context } => write!(f, "{context}"),
         }
     }
 }
@@ -68,6 +75,7 @@ impl From<ReplError> for SpawnError {
             },
             ReplError::Component { context } => SpawnError::InvalidState { context },
             ReplError::Desync { context } => SpawnError::InvalidState { context },
+            ReplError::Rpc { context } => SpawnError::InvalidState { context },
         }
     }
 }

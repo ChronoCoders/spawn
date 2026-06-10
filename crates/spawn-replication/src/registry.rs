@@ -176,8 +176,9 @@ impl ReplicationRegistry {
     }
 }
 
-/// Order-sensitive FNV-1a fold of a component name into the manifest hash.
-fn fold_name(mut hash: u64, name: &str) -> u64 {
+/// Order-sensitive FNV-1a fold of a name into a manifest hash (shared by the RPC
+/// registry).
+pub(crate) fn fold_name(mut hash: u64, name: &str) -> u64 {
     if hash == 0 {
         hash = 0xcbf2_9ce4_8422_2325;
     }

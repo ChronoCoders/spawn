@@ -21,6 +21,7 @@ pub mod markers;
 pub mod predict;
 pub mod registry;
 pub mod role;
+pub mod rpc;
 pub mod snapshot;
 
 #[cfg(test)]
@@ -34,6 +35,10 @@ pub use markers::{AlwaysRelevant, OwnerOnly, Replicated, StaticRelevant};
 pub use predict::{replay, InputBuffer, Predicted, PredictionSmoother, SMOOTH_DECAY, SNAP_EPSILON};
 pub use registry::{ReplComponentId, Replicate, ReplicationRegistry};
 pub use role::NetRole;
+pub use rpc::{
+    decode_rpc, decode_rpc_header, encode_rpc, server_rpc_authorized, Rpc, RpcHeader, RpcId,
+    RpcKind, RpcRegistry,
+};
 pub use snapshot::{
     decode_snapshot, encode_snapshot, DecodeOutcome, SnapshotState, SEND_BUDGET_BYTES,
     SNAPSHOT_HISTORY, SNAPSHOT_HZ, SNAPSHOT_INTERVAL,
