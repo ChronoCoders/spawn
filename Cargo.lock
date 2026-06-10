@@ -2431,6 +2431,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "spawn-editor-shell"
+version = "0.1.0"
+dependencies = [
+ "spawn-asset",
+ "spawn-core",
+ "spawn-ecs",
+ "spawn-editor",
+ "spawn-input",
+ "spawn-platform",
+ "spawn-render",
+ "spawn-ui",
+ "winit",
+]
+
+[[package]]
 name = "spawn-engine"
 version = "0.1.0"
 dependencies = [
