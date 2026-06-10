@@ -16,6 +16,7 @@
 pub mod error;
 pub mod id;
 pub mod interest;
+pub mod interp;
 pub mod markers;
 pub mod registry;
 pub mod role;
@@ -27,6 +28,7 @@ mod testcomp;
 pub use error::{ReplError, ReplResult};
 pub use id::{ReplId, ReplIdMap};
 pub use interest::{ReplicationVisibility, VisibilityConfig};
+pub use interp::{default_interp_delay, InterpBuffer, InterpolatedTransform};
 pub use markers::{AlwaysRelevant, OwnerOnly, Replicated, StaticRelevant};
 pub use registry::{ReplComponentId, Replicate, ReplicationRegistry};
 pub use role::NetRole;
