@@ -137,7 +137,7 @@ fn key_index(key: KeyCode) -> usize {
 /// Edge queries follow the §1.2 convention: `begin_frame` copies `held` into
 /// `held_last_frame`, so `just_pressed`/`just_released` are edge-true only on
 /// the frame the transition's event was processed.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Keyboard {
     held: [bool; KEY_COUNT],
     held_last_frame: [bool; KEY_COUNT],

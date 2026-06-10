@@ -28,7 +28,7 @@ fn named_index(button: MouseButton) -> Option<usize> {
 ///
 /// `delta` and `wheel` accumulate over a frame and reset on `begin_frame`.
 /// Button edges follow the §1.2 convention.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Mouse {
     held: [bool; NAMED_BUTTONS],
     held_last_frame: [bool; NAMED_BUTTONS],

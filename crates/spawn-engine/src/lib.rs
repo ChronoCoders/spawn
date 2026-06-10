@@ -13,6 +13,7 @@ mod config;
 mod engine;
 mod error;
 mod frame;
+mod input;
 mod render;
 mod time;
 
@@ -21,11 +22,13 @@ pub use config::EngineConfig;
 pub use engine::Engine;
 pub use error::{EngineError, EngineResult};
 pub use frame::{ScheduleLabel, SyncMode};
+pub use input::InputFrame;
 pub use render::{
     CameraProxy, HeadlessBackend, RenderBackend, RenderProxies, RenderProxy, WgpuBackend,
 };
 pub use time::Time;
 
+pub use spawn_input::{KeyCode, Keyboard, Mouse, MouseButton};
 pub use spawn_platform::WindowConfig;
 pub use spawn_render::{
     DirectionalLight, Lighting, RenderResources, Renderer, ShadowConfig, SurfaceSize,

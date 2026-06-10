@@ -19,6 +19,7 @@ use spawn_render::SurfaceSize;
 
 use crate::config::EngineConfig;
 use crate::error::EngineResult;
+use crate::input::InputFrame;
 use crate::render::{RenderBackend, RenderProxies, RenderProxyStore};
 use crate::time::Time;
 
@@ -108,6 +109,7 @@ impl Engine {
 
         let time = Time::new(config.fixed_timestep);
         world.insert_resource(time);
+        world.insert_resource(InputFrame::snapshot(&input));
 
         // Startup runs once without an event swap, so first-frame readers still
         // see any events startup produced.
@@ -162,6 +164,10 @@ impl Engine {
         self.input.begin_frame();
         for event in self.pending_events.drain(..) {
             self.input.process(&event);
+        }
+        let input_frame = InputFrame::snapshot(&self.input);
+        if let Some(mut resource) = self.world.get_resource_mut::<InputFrame>() {
+            *resource = input_frame;
         }
 
         // 3. Asset pump (the single per-frame main-thread sync point).
