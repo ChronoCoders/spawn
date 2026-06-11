@@ -19,6 +19,7 @@ members = [
     "crates/spawn-build",
     "crates/spawn-engine",
     "crates/spawn-editor-shell",
+    "games/fracture",
 ]
 
 [workspace.package]
