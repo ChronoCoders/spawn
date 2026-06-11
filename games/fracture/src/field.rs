@@ -23,3 +23,7 @@ pub const POWERUP_HALF: f32 = 0.4;
 pub const POWERUP_FALL_SPEED: f32 = 4.0;
 
 pub const BACK_PLANE_Z: f32 = -2.0;
+
+pub const BALL_SPEED: f32 = 14.0;
+pub const PADDLE_SPEED: f32 = 22.0;
+pub const VIEWPORT_WIDTH: f32 = 720.0;

@@ -16,6 +16,30 @@ pub struct Collisions {
 
 impl Resource for Collisions {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputSource {
+    #[default]
+    Keys,
+    Mouse,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaddleControl {
+    pub key_intent: f32,
+    pub mouse_x: f32,
+    pub source: InputSource,
+    pub launch: bool,
+}
+
+impl Resource for PaddleControl {}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaddleState {
+    pub x: f32,
+}
+
+impl Resource for PaddleState {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Title,
