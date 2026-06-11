@@ -17,6 +17,7 @@ pub fn spawn_powerup(world: &mut World, kind: PowerUpKind, center: Vec3) -> Enti
     world.spawn_with((
         physics::box_transform(center, half),
         PowerUp { kind },
+        crate::render::powerup_renderable(kind),
         rb,
         col,
     ))
@@ -118,6 +119,7 @@ fn multi_ball(world: &mut World) {
             speed,
             launched: true,
         },
+        crate::render::ball_renderable(),
         LinVel(ball::renormalize(mirrored, speed)),
         rb,
         col,
@@ -151,6 +153,7 @@ fn widen_paddle(world: &mut World) {
             min_x: -field::HALF_WIDTH + new_half,
             max_x: field::HALF_WIDTH - new_half,
         },
+        crate::render::paddle_renderable(),
         rb,
         col,
     ));

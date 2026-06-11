@@ -10,6 +10,7 @@ pub mod input;
 pub mod paddle;
 pub mod physics;
 pub mod powerup;
+pub mod render;
 pub mod resources;
 
 use spawn_core::Transform3D;
@@ -62,6 +63,9 @@ pub fn build() -> FractureResult<App> {
     app.insert_resource(SlowTimer::default());
     app.insert_resource(GameRng::seeded(0));
     app.add_startup_system(physics::spawn_field);
+    app.add_startup_system(render::spawn_back_plane);
+    app.add_render_setup(render::setup);
+    app.add_extract(render::extract);
     app.add_system(ScheduleLabel::Update, input::sample_input);
     app.add_fixed_hook(|world, _time| {
         gameplay::gameplay(world);

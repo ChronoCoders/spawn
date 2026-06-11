@@ -180,7 +180,17 @@ fn spawn_wall(commands: &mut Commands<'_>, side: WallSide) {
     let (center, half) = wall_geometry(side);
     let sensor = side == WallSide::Bottom;
     let (rb, col) = wall_bodies(half, sensor);
-    commands.spawn_with((box_transform(center, half), Wall { side }, rb, col));
+    if sensor {
+        commands.spawn_with((box_transform(center, half), Wall { side }, rb, col));
+    } else {
+        commands.spawn_with((
+            box_transform(center, half),
+            Wall { side },
+            crate::render::wall_renderable(),
+            rb,
+            col,
+        ));
+    }
 }
 
 pub fn spawn_field(commands: &mut Commands<'_>) -> EcsResult<()> {
@@ -203,6 +213,7 @@ pub fn spawn_field(commands: &mut Commands<'_>) -> EcsResult<()> {
             min_x: -field::HALF_WIDTH + field::PADDLE_HALF_WIDTH,
             max_x: field::HALF_WIDTH - field::PADDLE_HALF_WIDTH,
         },
+        crate::render::paddle_renderable(),
         paddle_rb,
         paddle_col,
     ));
@@ -214,6 +225,7 @@ pub fn spawn_field(commands: &mut Commands<'_>) -> EcsResult<()> {
             speed: 0.0,
             launched: false,
         },
+        crate::render::ball_renderable(),
         LinVel(Vec3::ZERO),
         ball_rb,
         ball_col,
