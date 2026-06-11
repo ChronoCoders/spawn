@@ -23,6 +23,8 @@ use crate::error::EngineResult;
 use crate::input::InputFrame;
 use crate::render::{RenderBackend, RenderProxies, RenderProxyStore};
 use crate::time::Time;
+use crate::ui::{UiSetup, UiUpdate};
+use spawn_ui::{Style, UiTree};
 
 /// An exclusive fixed-step hook: `&mut World` work run once per fixed tick (where
 /// physics is wired). Receives the current [`Time`] snapshot.
@@ -52,6 +54,8 @@ pub(crate) struct EngineParts {
     /// them.
     pub render_setups: Vec<crate::render::RenderSetup>,
     pub audio_setups: Vec<crate::audio::AudioSetup>,
+    pub ui_setups: Vec<UiSetup>,
+    pub ui_updates: Vec<UiUpdate>,
     pub config: EngineConfig,
 }
 
@@ -66,6 +70,8 @@ pub struct Engine {
     fixed_schedule: Schedule,
     fixed_hooks: Vec<FixedHook>,
     extracts: Vec<ExtractFn>,
+    ui: Option<UiTree>,
+    ui_updates: Vec<UiUpdate>,
     proxies: RenderProxyStore,
     time: Time,
     config: EngineConfig,
@@ -96,6 +102,8 @@ impl Engine {
             // assemble; the headless path has no renderer to run them against.
             render_setups: _,
             audio_setups,
+            ui_setups,
+            ui_updates,
             config,
         } = parts;
 
@@ -115,6 +123,16 @@ impl Engine {
         for setup in audio_setups {
             setup(&mut assets, &mut world)?;
         }
+
+        let ui = if ui_setups.is_empty() {
+            None
+        } else {
+            let mut tree = UiTree::new(Style::default());
+            for setup in ui_setups {
+                setup(&mut tree)?;
+            }
+            Some(tree)
+        };
 
         // Startup runs once without an event swap, so first-frame readers still
         // see any events startup produced.
@@ -145,6 +163,8 @@ impl Engine {
             fixed_schedule,
             fixed_hooks,
             extracts,
+            ui,
+            ui_updates,
             proxies: RenderProxyStore::new(),
             time,
             config,
@@ -209,9 +229,19 @@ impl Engine {
             }
         }
 
-        // 7 + 8. Publish per sync mode and render.
+        // 7. UI: run the overlay updates against the live world. The tree is
+        // engine-owned and threaded to the backend (bypassing the proxy buffer);
+        // the backend lays it out and composites it (the headless backend ignores it).
+        if let Some(tree) = self.ui.as_mut() {
+            for update in &mut self.ui_updates {
+                update(&self.world, tree)?;
+            }
+        }
+
+        // 8. Publish per sync mode and render.
         let mode = self.config.sync_mode;
-        self.backend.submit(self.proxies.read(mode))?;
+        self.backend
+            .submit(self.proxies.read(mode), self.ui.as_mut())?;
         self.proxies.advance(mode);
 
         // 9. Audio pump.
@@ -242,6 +272,11 @@ impl Engine {
     /// The current frame clock.
     pub fn time(&self) -> &Time {
         &self.time
+    }
+
+    /// The engine-owned overlay tree, present when any UI setup was registered.
+    pub fn ui(&self) -> Option<&UiTree> {
+        self.ui.as_ref()
     }
 
     /// Extractions written but not yet consumed by the backend: `0` in

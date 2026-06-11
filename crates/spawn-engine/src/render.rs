@@ -13,13 +13,15 @@ use spawn_asset::AssetId;
 use spawn_core::{Color, Mat4};
 use spawn_platform::Window;
 use spawn_render::{
-    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, Lighting, PassDesc, PassKind,
-    RenderGraph, RenderResources, RenderScene, Renderer, RendererConfig, ResourceDesc,
-    ResourceKind, ShadowConfig, SizeSpec, SurfaceSize,
+    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, Font, FontRegistry, Lighting, Overlay,
+    PassDesc, PassKind, RenderGraph, RenderResources, RenderScene, Renderer, RendererConfig,
+    ResourceDesc, ResourceKind, ShadowConfig, SizeSpec, SurfaceSize,
 };
+use spawn_ui::{DrawList, UiTree};
 
 use crate::error::EngineResult;
 use crate::frame::SyncMode;
+use crate::ui::DEFAULT_FONT;
 
 /// Extracted camera state: world→view and view→clip, as plain matrices.
 #[derive(Debug, Clone, Copy)]
@@ -71,8 +73,10 @@ impl RenderProxies {
 /// Consumes extracted proxies and turns them into presented frames. Implemented
 /// by [`WgpuBackend`] (real GPU) and [`HeadlessBackend`] (no GPU).
 pub trait RenderBackend {
-    /// Renders one frame from the published proxy buffer.
-    fn submit(&mut self, proxies: &RenderProxies) -> EngineResult<()>;
+    /// Renders one frame from the published proxy buffer. `ui`, when present, is
+    /// the engine-owned overlay tree: the backend lays it out and composites it
+    /// over the lit scene. The headless backend ignores it.
+    fn submit(&mut self, proxies: &RenderProxies, ui: Option<&mut UiTree>) -> EngineResult<()>;
     /// Reconfigures for a new surface size.
     fn resize(&mut self, size: SurfaceSize) -> EngineResult<()>;
 }
@@ -152,7 +156,7 @@ impl HeadlessBackend {
 }
 
 impl RenderBackend for HeadlessBackend {
-    fn submit(&mut self, proxies: &RenderProxies) -> EngineResult<()> {
+    fn submit(&mut self, proxies: &RenderProxies, _ui: Option<&mut UiTree>) -> EngineResult<()> {
         self.last_draw_count = proxies.draws.len();
         self.frame += 1;
         Ok(())
@@ -176,6 +180,10 @@ pub struct WgpuBackend {
     graph: RenderGraph,
     compiled: CompiledGraph,
     resources: RenderResources,
+    fonts: FontRegistry,
+    measure_font: Font,
+    ui_draw_list: DrawList,
+    size: SurfaceSize,
 }
 
 /// An app-provided render-setup routine: builds GPU `Mesh`/`Material` resources
@@ -204,6 +212,13 @@ impl WgpuBackend {
         for setup in setups {
             setup(&mut renderer, &mut resources)?;
         }
+        let mut fonts = FontRegistry::new();
+        fonts.insert(
+            &renderer,
+            DEFAULT_FONT,
+            Font::embedded_monospace(&renderer, 8.0)?,
+        );
+        let measure_font = Font::embedded_monospace(&renderer, 8.0)?;
         // The standard engine graph is lit: a depth-only shadow caster writes the
         // shadow map, then the lit forward pass reads it and shades the surface.
         // The derived order places the shadow pass first (the lit pass reads its
@@ -247,18 +262,32 @@ impl WgpuBackend {
                 write: true,
             }),
         });
+        graph.add_pass(PassDesc {
+            name: "overlay",
+            kind: PassKind::Overlay2D,
+            reads: Vec::new(),
+            color: Some(ColorWrite {
+                target: surface,
+                clear: None,
+            }),
+            depth: None,
+        });
         let compiled = graph.compile(&renderer)?;
         Ok(Self {
             renderer,
             graph,
             compiled,
             resources,
+            fonts,
+            measure_font,
+            ui_draw_list: DrawList::default(),
+            size,
         })
     }
 }
 
 impl RenderBackend for WgpuBackend {
-    fn submit(&mut self, proxies: &RenderProxies) -> EngineResult<()> {
+    fn submit(&mut self, proxies: &RenderProxies, ui: Option<&mut UiTree>) -> EngineResult<()> {
         let camera = Camera::new(proxies.camera.view, proxies.camera.projection);
         // Resolve each proxy to its GPU mesh/material; an unregistered id is
         // skipped. The draw list borrows the registry, so it is built per frame
@@ -276,11 +305,28 @@ impl RenderBackend for WgpuBackend {
                     })
             })
             .collect();
+        let overlay = match ui {
+            Some(tree) => {
+                let extent = spawn_core::Vec2::new(
+                    self.size.width.max(1) as f32,
+                    self.size.height.max(1) as f32,
+                );
+                tree.compute_layout(extent, &mut self.measure_font)?;
+                tree.build_draw_list(&mut self.ui_draw_list)?;
+                Some(Overlay {
+                    tree,
+                    draw_list: &self.ui_draw_list,
+                    fonts: &self.fonts,
+                    lines: &[],
+                })
+            }
+            None => None,
+        };
         let scene = RenderScene {
             camera: &camera,
             lighting: Some(&proxies.lighting),
             draws: &draws,
-            overlay: None,
+            overlay,
         };
         let mut frame = self.renderer.begin_frame()?;
         frame.execute(&self.compiled, &scene)?;
@@ -289,6 +335,7 @@ impl RenderBackend for WgpuBackend {
     }
 
     fn resize(&mut self, size: SurfaceSize) -> EngineResult<()> {
+        self.size = size;
         self.renderer.resize(size)?;
         self.compiled.resize(&self.graph, &self.renderer)?;
         Ok(())

@@ -17,7 +17,11 @@ struct Recording {
 }
 
 impl RenderBackend for Recording {
-    fn submit(&mut self, proxies: &RenderProxies) -> EngineResult<()> {
+    fn submit(
+        &mut self,
+        proxies: &RenderProxies,
+        _ui: Option<&mut spawn_engine::UiTree>,
+    ) -> EngineResult<()> {
         self.counts.borrow_mut().push(proxies.draws.len());
         Ok(())
     }

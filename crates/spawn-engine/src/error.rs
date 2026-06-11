@@ -29,6 +29,8 @@ pub enum EngineError {
     Asset(spawn_asset::AssetError),
     /// An audio-engine pump failed during the frame.
     Audio(spawn_audio::AudioError),
+    /// A UI layout or draw-list operation failed.
+    Ui(spawn_ui::UiError),
     /// `run`/`run_headless` was called on an engine that is already running.
     AlreadyRunning,
 }
@@ -43,6 +45,7 @@ impl fmt::Display for EngineError {
             Self::Input(e) => write!(f, "input error: {e}"),
             Self::Asset(e) => write!(f, "asset error: {e}"),
             Self::Audio(e) => write!(f, "audio error: {e}"),
+            Self::Ui(e) => write!(f, "ui error: {e}"),
             Self::AlreadyRunning => write!(f, "engine is already running"),
         }
     }
@@ -83,6 +86,12 @@ impl From<spawn_asset::AssetError> for EngineError {
 impl From<spawn_audio::AudioError> for EngineError {
     fn from(e: spawn_audio::AudioError) -> Self {
         Self::Audio(e)
+    }
+}
+
+impl From<spawn_ui::UiError> for EngineError {
+    fn from(e: spawn_ui::UiError) -> Self {
+        Self::Ui(e)
     }
 }
 

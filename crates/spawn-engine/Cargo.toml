@@ -13,6 +13,7 @@ spawn-render = { path = "../spawn-render", version = "0.1.0" }
 spawn-asset = { path = "../spawn-asset", version = "0.1.0" }
 spawn-audio = { path = "../spawn-audio", version = "0.1.0" }
 spawn-physics = { path = "../spawn-physics", version = "0.1.0" }
+spawn-ui = { path = "../spawn-ui", version = "0.1.0" }
 
 [lints]
 workspace = true

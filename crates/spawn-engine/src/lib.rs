@@ -17,6 +17,7 @@ mod frame;
 mod input;
 mod render;
 mod time;
+mod ui;
 
 pub use app::App;
 pub use audio::{AudioCommand, AudioCommands};
@@ -29,9 +30,11 @@ pub use render::{
     CameraProxy, HeadlessBackend, RenderBackend, RenderProxies, RenderProxy, WgpuBackend,
 };
 pub use time::Time;
+pub use ui::DEFAULT_FONT;
 
 pub use spawn_input::{KeyCode, Keyboard, Mouse, MouseButton};
 pub use spawn_platform::WindowConfig;
 pub use spawn_render::{
     DirectionalLight, Lighting, RenderResources, Renderer, ShadowConfig, SurfaceSize,
 };
+pub use spawn_ui::{FontId, NodeId, Style, UiTree};

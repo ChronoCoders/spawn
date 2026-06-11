@@ -9,6 +9,7 @@ use spawn_ecs::system::BuildableSystem;
 use spawn_ecs::{EcsResult, Event, IntoSystem, Resource, Stage, World};
 use spawn_platform::{EventLoop, PlatformApp, PlatformEvent, Window, WindowEvent};
 use spawn_render::{RenderResources, Renderer, RendererConfig, SurfaceSize};
+use spawn_ui::UiTree;
 
 use crate::config::EngineConfig;
 use crate::engine::{Clock, Engine, EngineParts};
@@ -29,6 +30,8 @@ pub struct App {
     extracts: Vec<crate::engine::ExtractFn>,
     render_setups: Vec<crate::render::RenderSetup>,
     audio_setups: Vec<crate::audio::AudioSetup>,
+    ui_setups: Vec<crate::ui::UiSetup>,
+    ui_updates: Vec<crate::ui::UiUpdate>,
     config: EngineConfig,
 }
 
@@ -57,6 +60,8 @@ impl App {
             extracts: Vec::new(),
             render_setups: Vec::new(),
             audio_setups: Vec::new(),
+            ui_setups: Vec::new(),
+            ui_updates: Vec::new(),
             config: EngineConfig::default(),
         }
     }
@@ -152,6 +157,29 @@ impl App {
         self
     }
 
+    /// Registers a UI-setup hook run once at assembly: builds the overlay tree
+    /// (panels, labels) the engine owns and renders. Registering any setup makes
+    /// the engine construct a tree; without one, no overlay is drawn. Text nodes
+    /// should use [`DEFAULT_FONT`](crate::DEFAULT_FONT).
+    pub fn add_ui_setup<F>(&mut self, setup: F) -> &mut Self
+    where
+        F: FnOnce(&mut UiTree) -> EngineResult<()> + 'static,
+    {
+        self.ui_setups.push(Box::new(setup));
+        self
+    }
+
+    /// Registers a per-frame UI-update hook: reads the world and mutates the
+    /// overlay tree (e.g. setting label text from game state). Run after the
+    /// schedules each frame, before the tree is laid out and composited.
+    pub fn add_ui_update<F>(&mut self, update: F) -> &mut Self
+    where
+        F: FnMut(&World, &mut UiTree) -> EngineResult<()> + 'static,
+    {
+        self.ui_updates.push(Box::new(update));
+        self
+    }
+
     /// Replaces the engine configuration.
     pub fn set_config(&mut self, config: EngineConfig) -> &mut Self {
         self.config = config;
@@ -234,6 +262,8 @@ impl App {
             extracts: self.extracts,
             render_setups: self.render_setups,
             audio_setups: self.audio_setups,
+            ui_setups: self.ui_setups,
+            ui_updates: self.ui_updates,
             config: self.config,
         }
     }
