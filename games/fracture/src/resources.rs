@@ -1,6 +1,20 @@
-use spawn_ecs::Resource;
+use spawn_ecs::{Entity, Resource};
 
 pub const STARTING_LIVES: u8 = 3;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Contact {
+    pub a: Entity,
+    pub b: Entity,
+    pub started: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct Collisions {
+    pub contacts: Vec<Contact>,
+}
+
+impl Resource for Collisions {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
