@@ -19,8 +19,11 @@ pub fn maintain_speed(velocity: Vec3, speed: f32) -> Vec3 {
     if scaled.y.abs() >= min_vertical {
         return scaled;
     }
-    let sign = if scaled.y >= 0.0 { 1.0 } else { -1.0 };
-    renormalize(Vec3::new(scaled.x, sign * min_vertical, 0.0), speed)
+    let sign_y = if scaled.y >= 0.0 { 1.0 } else { -1.0 };
+    let sign_x = if scaled.x >= 0.0 { 1.0 } else { -1.0 };
+    let vy = sign_y * min_vertical;
+    let vx = sign_x * (speed * speed - vy * vy).max(0.0).sqrt();
+    Vec3::new(vx, vy, 0.0)
 }
 
 pub fn launch_velocity() -> Vec3 {
