@@ -75,6 +75,9 @@ pub fn powerup_collection(world: &mut World, contacts: &[Contact]) {
     for entity in remove {
         let _ = world.despawn(entity);
     }
+    if !collected.is_empty() {
+        crate::audio::play(world, crate::audio::SoundEffect::Pickup);
+    }
     for kind in collected {
         apply_effect(world, kind);
     }

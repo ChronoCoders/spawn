@@ -1,5 +1,6 @@
 #![deny(warnings)]
 
+pub mod audio;
 pub mod ball;
 pub mod brick;
 pub mod components;
@@ -66,6 +67,7 @@ pub fn build() -> FractureResult<App> {
     app.add_startup_system(render::spawn_back_plane);
     app.add_render_setup(render::setup);
     app.add_extract(render::extract);
+    app.add_audio_setup(audio::setup);
     app.add_system(ScheduleLabel::Update, input::sample_input);
     app.add_fixed_hook(|world, _time| {
         gameplay::gameplay(world);

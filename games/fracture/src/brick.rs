@@ -75,6 +75,7 @@ pub fn brick_collisions(world: &mut World, contacts: &[Contact]) {
         if let Some(mut state) = world.get_resource_mut::<GameState>() {
             state.score += score_gain;
         }
+        crate::audio::play(world, crate::audio::SoundEffect::Break);
     }
 
     for position in destroyed {
@@ -104,5 +105,6 @@ pub fn level_clear(world: &mut World) {
         if let Some(mut state) = world.get_resource_mut::<GameState>() {
             state.phase = Phase::LevelComplete;
         }
+        crate::audio::play(world, crate::audio::SoundEffect::LevelComplete);
     }
 }
