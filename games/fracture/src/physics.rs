@@ -49,12 +49,16 @@ pub fn ball_bodies() -> (RigidBody, Collider) {
 }
 
 pub fn paddle_bodies() -> (RigidBody, Collider) {
+    paddle_bodies_with(field::PADDLE_HALF_WIDTH)
+}
+
+pub fn paddle_bodies_with(half_width: f32) -> (RigidBody, Collider) {
     (
         RigidBody(RigidBodyDesc::kinematic().with_locks(planar_locks())),
         Collider(
             ColliderDesc::new(Shape::Cuboid {
                 half_extents: Vec3::new(
-                    field::PADDLE_HALF_WIDTH,
+                    half_width,
                     field::PADDLE_HALF_HEIGHT,
                     field::PADDLE_HALF_DEPTH,
                 ),

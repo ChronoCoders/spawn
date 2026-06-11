@@ -4,7 +4,7 @@ use spawn_ecs::{Entity, World};
 use crate::components::{Ball, Paddle};
 use crate::field;
 use crate::physics::LinVel;
-use crate::resources::{Collisions, Contact, PaddleControl, PaddleState};
+use crate::resources::{Contact, PaddleControl, PaddleState};
 
 const MIN_VERTICAL_FRACTION: f32 = 0.25;
 const ENGLISH_STRENGTH: f32 = 8.0;
@@ -73,11 +73,7 @@ fn paddle_entity(world: &World) -> Option<Entity> {
         .next()
 }
 
-pub fn ball_response(world: &mut World) {
-    let contacts: Vec<Contact> = match world.get_resource::<Collisions>() {
-        Some(collisions) => collisions.contacts.clone(),
-        None => return,
-    };
+pub fn ball_response(world: &mut World, contacts: &[Contact]) {
     let Some(paddle) = paddle_entity(world) else {
         return;
     };
@@ -85,7 +81,7 @@ pub fn ball_response(world: &mut World) {
         .get_resource::<PaddleState>()
         .map(|state| state.x)
         .unwrap_or(0.0);
-    for contact in &contacts {
+    for contact in contacts {
         if !contact.started {
             continue;
         }
@@ -107,10 +103,4 @@ pub fn ball_response(world: &mut World) {
             }
         }
     }
-}
-
-pub fn gameplay(world: &mut World) {
-    crate::paddle::paddle_tracking(world);
-    ball_launch_and_speed(world);
-    ball_response(world);
 }

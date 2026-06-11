@@ -1,12 +1,15 @@
 #![deny(warnings)]
 
 pub mod ball;
+pub mod brick;
 pub mod components;
 pub mod error;
 pub mod field;
+pub mod gameplay;
 pub mod input;
 pub mod paddle;
 pub mod physics;
+pub mod powerup;
 pub mod resources;
 
 use spawn_core::Transform3D;
@@ -15,7 +18,7 @@ use spawn_engine::{App, EngineConfig, ScheduleLabel, SyncMode, WindowConfig};
 use spawn_physics::ecs::{Collider, PhysicsBody, RigidBody};
 
 use crate::error::FractureResult;
-use crate::resources::{Collisions, GameState, PaddleControl, PaddleState};
+use crate::resources::{Collisions, GameRng, GameState, PaddleControl, PaddleState, SlowTimer};
 
 pub use field::{FIELD_HEIGHT, FIELD_WIDTH};
 
@@ -56,10 +59,12 @@ pub fn build() -> FractureResult<App> {
     app.insert_resource(Collisions::default());
     app.insert_resource(PaddleControl::default());
     app.insert_resource(PaddleState::default());
+    app.insert_resource(SlowTimer::default());
+    app.insert_resource(GameRng::seeded(0));
     app.add_startup_system(physics::spawn_field);
     app.add_system(ScheduleLabel::Update, input::sample_input);
     app.add_fixed_hook(|world, _time| {
-        ball::gameplay(world);
+        gameplay::gameplay(world);
         Ok(())
     });
     app.add_fixed_hook(physics::fixed_hook()?);

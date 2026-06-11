@@ -48,6 +48,15 @@ impl BrickKind {
     pub fn is_breakable(self) -> bool {
         !matches!(self, BrickKind::Solid)
     }
+
+    pub fn score(self) -> u32 {
+        match self {
+            BrickKind::Normal => 100,
+            BrickKind::Tough => 200,
+            BrickKind::Reinforced => 300,
+            BrickKind::Solid => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
