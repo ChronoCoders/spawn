@@ -1,5 +1,8 @@
 #![deny(warnings)]
 
+pub mod components;
+pub mod resources;
+
 use spawn_engine::{App, EngineConfig, EngineResult, SyncMode, WindowConfig};
 
 pub const FIELD_WIDTH: f32 = 20.0;
