@@ -93,7 +93,7 @@ pub enum Phase {
     Won,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GameState {
     pub score: u32,
     pub lives: u8,

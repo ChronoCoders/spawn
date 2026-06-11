@@ -7,6 +7,7 @@ pub mod components;
 pub mod error;
 pub mod field;
 pub mod gameplay;
+pub mod hud;
 pub mod input;
 pub mod paddle;
 pub mod physics;
@@ -68,6 +69,7 @@ pub fn build() -> FractureResult<App> {
     app.add_render_setup(render::setup);
     app.add_extract(render::extract);
     app.add_audio_setup(audio::setup);
+    hud::install(&mut app);
     app.add_system(ScheduleLabel::Update, input::sample_input);
     app.add_fixed_hook(|world, _time| {
         gameplay::gameplay(world);
