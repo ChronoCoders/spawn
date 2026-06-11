@@ -9,9 +9,11 @@ pub mod field;
 pub mod gameplay;
 pub mod hud;
 pub mod input;
+pub mod levels;
 pub mod paddle;
 pub mod physics;
 pub mod powerup;
+pub mod progression;
 pub mod render;
 pub mod resources;
 
@@ -21,7 +23,9 @@ use spawn_engine::{App, EngineConfig, ScheduleLabel, SyncMode, WindowConfig};
 use spawn_physics::ecs::{Collider, PhysicsBody, RigidBody};
 
 use crate::error::FractureResult;
-use crate::resources::{Collisions, GameRng, GameState, PaddleControl, PaddleState, SlowTimer};
+use crate::resources::{
+    Collisions, DropChance, GameRng, GameState, PaddleControl, PaddleState, SlowTimer,
+};
 
 pub use field::{FIELD_HEIGHT, FIELD_WIDTH};
 
@@ -64,6 +68,8 @@ pub fn build() -> FractureResult<App> {
     app.insert_resource(PaddleState::default());
     app.insert_resource(SlowTimer::default());
     app.insert_resource(GameRng::seeded(0));
+    app.insert_resource(DropChance::default());
+    levels::spawn_level(app.world_mut(), 0);
     app.add_startup_system(physics::spawn_field);
     app.add_startup_system(render::spawn_back_plane);
     app.add_render_setup(render::setup);

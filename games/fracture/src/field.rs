@@ -28,7 +28,6 @@ pub const BALL_SPEED: f32 = 14.0;
 pub const PADDLE_SPEED: f32 = 22.0;
 pub const VIEWPORT_WIDTH: f32 = 720.0;
 
-pub const DROP_CHANCE: f32 = 0.35;
 pub const SLOW_DURATION: f32 = 6.0;
 pub const SLOW_FACTOR: f32 = 0.5;
 pub const WIDEN_FACTOR: f32 = 1.5;

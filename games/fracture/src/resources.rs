@@ -46,6 +46,17 @@ pub struct SlowTimer(pub f32);
 impl Resource for SlowTimer {}
 
 #[derive(Debug, Clone, Copy)]
+pub struct DropChance(pub f32);
+
+impl Default for DropChance {
+    fn default() -> Self {
+        Self(0.0)
+    }
+}
+
+impl Resource for DropChance {}
+
+#[derive(Debug, Clone, Copy)]
 pub struct GameRng {
     state: u64,
 }
