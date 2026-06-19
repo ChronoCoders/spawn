@@ -8,7 +8,8 @@
 
 pub mod filter;
 
-use crate::archetype::{Archetype, ArchetypeStore};
+use crate::archetype::{Archetype, ArchetypeId, ArchetypeStore, ArchetypeTicks};
+use crate::change::Tick;
 use crate::component::{column_slice, column_slice_mut, Component, ComponentId, ComponentRegistry};
 use crate::entity::Entity;
 use crate::query::filter::QueryFilter;
@@ -358,12 +359,17 @@ include!("tuples.rs");
 /// A prepared view over the archetypes matching `Q` and `F`. Construct via
 /// [`World::query`](crate::world::World::query) /
 /// [`query_mut`](crate::world::World::query_mut); attach filters with
-/// [`with`](Query::with) / [`without`](Query::without).
+/// [`with`](Query::with) / [`without`](Query::without) /
+/// [`added`](Query::added) / [`changed`](Query::changed).
 pub struct Query<'w, Q: QueryData, F: QueryFilter> {
     store: QueryStore<'w>,
     registry: &'w ComponentRegistry,
+    last_run: Tick,
+    change_tick: Tick,
     _marker: QueryMarker<Q, F>,
 }
+
+const NO_TICKS: &[ArchetypeTicks] = &[];
 
 type QueryMarker<Q, F> = PhantomData<(fn() -> Q, fn() -> F)>;
 
@@ -382,10 +388,16 @@ impl<'w> QueryStore<'w> {
 }
 
 impl<'w, Q: QueryData, F: QueryFilter> Query<'w, Q, F> {
-    pub(crate) fn new_shared(store: &'w ArchetypeStore, registry: &'w ComponentRegistry) -> Self {
+    pub(crate) fn new_shared(
+        store: &'w ArchetypeStore,
+        registry: &'w ComponentRegistry,
+        last_run: Tick,
+    ) -> Self {
         Self {
             store: QueryStore::Shared(store),
             registry,
+            last_run,
+            change_tick: Tick::ZERO,
             _marker: PhantomData,
         }
     }
@@ -393,10 +405,13 @@ impl<'w, Q: QueryData, F: QueryFilter> Query<'w, Q, F> {
     pub(crate) fn new_exclusive(
         store: &'w mut ArchetypeStore,
         registry: &'w ComponentRegistry,
+        change_tick: Tick,
     ) -> Self {
         Self {
             store: QueryStore::Exclusive(store),
             registry,
+            last_run: Tick::ZERO,
+            change_tick,
             _marker: PhantomData,
         }
     }
@@ -405,11 +420,28 @@ impl<'w, Q: QueryData, F: QueryFilter> Query<'w, Q, F> {
         Q::matches(archetype, self.registry) && F::matches(archetype, self.registry)
     }
 
+    fn collect_writes(&self) -> ([Option<ComponentId>; 12], usize) {
+        let registry = self.registry;
+        let mut writes: [Option<ComponentId>; 12] = [None; 12];
+        let mut n = 0usize;
+        Q::access(&mut |tid, _name, write| {
+            if write {
+                if let Some(slot) = writes.get_mut(n) {
+                    *slot = registry.component_id_of(tid);
+                }
+                n += 1;
+            }
+        });
+        (writes, n)
+    }
+
     /// Adds a [`With<T>`](filter::With) presence constraint.
     pub fn with<T: Component>(self) -> Query<'w, Q, (F, filter::With<T>)> {
         Query {
             store: self.store,
             registry: self.registry,
+            last_run: self.last_run,
+            change_tick: self.change_tick,
             _marker: PhantomData,
         }
     }
@@ -419,6 +451,30 @@ impl<'w, Q: QueryData, F: QueryFilter> Query<'w, Q, F> {
         Query {
             store: self.store,
             registry: self.registry,
+            last_run: self.last_run,
+            change_tick: self.change_tick,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Adds an [`Added<T>`](filter::Added) change-detection constraint.
+    pub fn added<T: Component>(self) -> Query<'w, Q, (F, filter::Added<T>)> {
+        Query {
+            store: self.store,
+            registry: self.registry,
+            last_run: self.last_run,
+            change_tick: self.change_tick,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Adds a [`Changed<T>`](filter::Changed) change-detection constraint.
+    pub fn changed<T: Component>(self) -> Query<'w, Q, (F, filter::Changed<T>)> {
+        Query {
+            store: self.store,
+            registry: self.registry,
+            last_run: self.last_run,
+            change_tick: self.change_tick,
             _marker: PhantomData,
         }
     }
@@ -429,25 +485,54 @@ impl<'w, Q: QueryData, F: QueryFilter> Query<'w, Q, F> {
             store: self.store.as_ref(),
             registry: self.registry,
             archetype: 0,
+            current_arch: 0,
             current: None,
+            row: 0,
+            last_run: self.last_run,
             remaining: self.count(),
             _marker: PhantomData,
         }
     }
 
     /// Exclusive iteration over matching rows; required for any `&mut T` in `Q`.
-    /// Allocation-free. A shared-only query yields nothing here.
+    /// Allocation-free. A shared-only query yields nothing here. Stamps the
+    /// changed tick of every `&mut` component in matching archetypes.
     pub fn iter_mut(&mut self) -> QueryIterMut<'_, Q, F> {
         let remaining = self.count();
+        let (writes, nw) = self.collect_writes();
+        let change_tick = self.change_tick;
+        let last_run = self.last_run;
         let registry = self.registry;
-        let archetypes = match &mut self.store {
-            QueryStore::Shared(_) => [].iter_mut(),
-            QueryStore::Exclusive(s) => s.archetypes_mut().iter_mut(),
+        if nw > 0 {
+            if let QueryStore::Exclusive(s) = &mut self.store {
+                let arch_count = s.archetypes().len();
+                for idx in 0..arch_count {
+                    let matches = Q::matches(&s.archetypes()[idx], registry);
+                    if !matches {
+                        continue;
+                    }
+                    let aid = ArchetypeId::new(idx as u32);
+                    for w in writes.iter().take(nw.min(12)).flatten() {
+                        s.stamp_changed_all(aid, *w, change_tick);
+                    }
+                }
+            }
+        }
+        let (archetypes, ticks) = match &mut self.store {
+            QueryStore::Shared(_) => ([].iter_mut().enumerate(), NO_TICKS),
+            QueryStore::Exclusive(s) => {
+                let (a, t) = s.archetypes_and_ticks_mut();
+                (a.iter_mut().enumerate(), t)
+            }
         };
         QueryIterMut {
             archetypes,
+            ticks,
             registry,
             current: None,
+            current_arch: 0,
+            row: 0,
+            last_run,
             remaining,
             _marker: PhantomData,
         }
@@ -462,66 +547,113 @@ impl<'w, Q: QueryData, F: QueryFilter> Query<'w, Q, F> {
         if !self.archetype_matches(archetype) {
             return None;
         }
+        if F::NEEDS_ROW_FILTER
+            && !F::row_matches(store.tick(aid), self.registry, row, self.last_run)
+        {
+            return None;
+        }
         Q::get_row(archetype, self.registry, row)
     }
 
-    /// Exclusive random access by entity, respecting filters.
+    /// Exclusive random access by entity, respecting filters. Stamps the changed
+    /// tick of each `&mut` component at that row.
     pub fn get_mut(&mut self, entity: Entity) -> Option<Q::ItemMut<'_>> {
-        let matches;
-        let (aid, row) = {
+        let change_tick = self.change_tick;
+        let last_run = self.last_run;
+        let (writes, nw) = self.collect_writes();
+        let (aid, row, ok) = {
             let store = self.store.as_ref();
             let (aid, row) = store.location(entity)?;
-            matches = self.archetype_matches(store.archetype(aid));
-            (aid, row)
+            let archetype = store.archetype(aid);
+            let mut ok = self.archetype_matches(archetype);
+            if ok && F::NEEDS_ROW_FILTER {
+                ok = F::row_matches(store.tick(aid), self.registry, row, last_run);
+            }
+            (aid, row, ok)
         };
-        if !matches {
+        if !ok {
             return None;
         }
         let store = match &mut self.store {
             QueryStore::Shared(_) => return None,
             QueryStore::Exclusive(s) => s,
         };
+        for w in writes.iter().take(nw.min(12)).flatten() {
+            store.mark_changed(aid, *w, row, change_tick);
+        }
         Q::get_row_mut(store.archetype_mut(aid), self.registry, row)
     }
 
-    /// Entities matching the query, in deterministic iteration order.
+    /// Entities matching the query (and any row filters), in deterministic order.
     pub fn iter_entities(&self) -> impl Iterator<Item = Entity> + '_ {
         let store = self.store.as_ref();
+        let registry = self.registry;
+        let last_run = self.last_run;
         store
             .archetypes()
             .iter()
-            .filter(move |a| self.archetype_matches(a))
-            .flat_map(|a| a.entities().iter().copied())
+            .enumerate()
+            .flat_map(move |(idx, a)| {
+                let matches = Q::matches(a, registry) && F::matches(a, registry);
+                let ticks = store.ticks();
+                a.entities()
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(move |(row, e)| {
+                        if matches
+                            && (!F::NEEDS_ROW_FILTER
+                                || F::row_matches(&ticks[idx], registry, row, last_run))
+                        {
+                            Some(e)
+                        } else {
+                            None
+                        }
+                    })
+            })
     }
 
-    /// Matching-entity count without touching component columns.
+    /// Matching-row count, honoring row filters.
     pub fn count(&self) -> usize {
         let store = self.store.as_ref();
-        store
-            .archetypes()
-            .iter()
-            .filter(|a| self.archetype_matches(a))
-            .map(|a| a.len())
-            .sum()
+        if !F::NEEDS_ROW_FILTER {
+            return store
+                .archetypes()
+                .iter()
+                .filter(|a| self.archetype_matches(a))
+                .map(|a| a.len())
+                .sum();
+        }
+        let ticks = store.ticks();
+        let mut total = 0;
+        for (idx, a) in store.archetypes().iter().enumerate() {
+            if self.archetype_matches(a) {
+                let t = &ticks[idx];
+                for row in 0..a.len() {
+                    if F::row_matches(t, self.registry, row, self.last_run) {
+                        total += 1;
+                    }
+                }
+            }
+        }
+        total
     }
 
-    /// Returns `true` iff no entity matches.
+    /// Returns `true` iff no row matches.
     pub fn is_empty(&self) -> bool {
-        let store = self.store.as_ref();
-        !store
-            .archetypes()
-            .iter()
-            .any(|a| self.archetype_matches(a) && a.len() > 0)
+        self.count() == 0
     }
 }
 
-/// Allocation-free shared row iterator. State is an archetype cursor plus the
-/// current archetype's row iterator.
+/// Allocation-free shared row iterator over a query's matching rows.
 pub struct QueryIter<'q, Q: QueryData, F: QueryFilter> {
     store: &'q ArchetypeStore,
     registry: &'q ComponentRegistry,
     archetype: usize,
+    current_arch: usize,
     current: Option<Q::Iter<'q>>,
+    row: usize,
+    last_run: Tick,
     remaining: usize,
     _marker: PhantomData<fn() -> F>,
 }
@@ -532,24 +664,43 @@ impl<'q, Q: QueryData, F: QueryFilter> Iterator for QueryIter<'q, Q, F> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(iter) = &mut self.current {
-                if let Some(item) = iter.next() {
+                for item in iter.by_ref() {
+                    let r = self.row;
+                    self.row += 1;
+                    if F::NEEDS_ROW_FILTER
+                        && !F::row_matches(
+                            &self.store.ticks()[self.current_arch],
+                            self.registry,
+                            r,
+                            self.last_run,
+                        )
+                    {
+                        continue;
+                    }
                     self.remaining -= 1;
                     return Some(item);
                 }
                 self.current = None;
             }
             let archetypes = self.store.archetypes();
+            let mut advanced = false;
             while self.archetype < archetypes.len() {
-                let a = &archetypes[self.archetype];
+                let idx = self.archetype;
+                let a = &archetypes[idx];
                 self.archetype += 1;
                 if Q::matches(a, self.registry) && F::matches(a, self.registry) {
-                    self.current = Q::iter_archetype(a, self.registry);
-                    if self.current.is_some() {
+                    if let Some(it) = Q::iter_archetype(a, self.registry) {
+                        self.current = Some(it);
+                        self.current_arch = idx;
+                        self.row = 0;
+                        advanced = true;
                         break;
                     }
                 }
             }
-            self.current.as_ref()?;
+            if !advanced {
+                return None;
+            }
         }
     }
 
@@ -562,11 +713,16 @@ impl<'q, Q: QueryData, F: QueryFilter> ExactSizeIterator for QueryIter<'q, Q, F>
 
 /// Allocation-free exclusive row iterator. Walks archetypes via a slice
 /// `iter_mut`, so each archetype's columns are borrowed disjointly for the
-/// iterator's lifetime without `unsafe`.
+/// iterator's lifetime without `unsafe`; ticks are read from the parallel
+/// shared borrow.
 pub struct QueryIterMut<'q, Q: QueryData, F: QueryFilter> {
-    archetypes: std::slice::IterMut<'q, Archetype>,
+    archetypes: std::iter::Enumerate<std::slice::IterMut<'q, Archetype>>,
+    ticks: &'q [ArchetypeTicks],
     registry: &'q ComponentRegistry,
     current: Option<Q::IterMut<'q>>,
+    current_arch: usize,
+    row: usize,
+    last_run: Tick,
     remaining: usize,
     _marker: PhantomData<fn() -> F>,
 }
@@ -577,18 +733,42 @@ impl<'q, Q: QueryData, F: QueryFilter> Iterator for QueryIterMut<'q, Q, F> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(iter) = &mut self.current {
-                if let Some(item) = iter.next() {
+                for item in iter.by_ref() {
+                    let r = self.row;
+                    self.row += 1;
+                    if F::NEEDS_ROW_FILTER
+                        && !F::row_matches(
+                            &self.ticks[self.current_arch],
+                            self.registry,
+                            r,
+                            self.last_run,
+                        )
+                    {
+                        continue;
+                    }
                     self.remaining -= 1;
                     return Some(item);
                 }
                 self.current = None;
             }
             let registry = self.registry;
-            let next = self
-                .archetypes
-                .by_ref()
-                .find(|a| Q::matches(a, registry) && F::matches(a, registry))?;
-            self.current = Q::iter_archetype_mut(next, registry);
+            let mut found = None;
+            for (idx, a) in self.archetypes.by_ref() {
+                if Q::matches(a, registry) && F::matches(a, registry) {
+                    if let Some(it) = Q::iter_archetype_mut(a, registry) {
+                        found = Some((idx, it));
+                        break;
+                    }
+                }
+            }
+            match found {
+                Some((idx, it)) => {
+                    self.current = Some(it);
+                    self.current_arch = idx;
+                    self.row = 0;
+                }
+                None => return None,
+            }
         }
     }
 
@@ -598,3 +778,20 @@ impl<'q, Q: QueryData, F: QueryFilter> Iterator for QueryIterMut<'q, Q, F> {
 }
 
 impl<'q, Q: QueryData, F: QueryFilter> ExactSizeIterator for QueryIterMut<'q, Q, F> {}
+
+/// Per-system persistent state for a [`Query`] parameter: the change tick at
+/// which the system last ran, used to evaluate [`Added`](filter::Added) /
+/// [`Changed`](filter::Changed) filters.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct QueryState {
+    last_run: Tick,
+}
+
+impl QueryState {
+    pub(crate) fn take_last_run(&mut self, current: Tick) -> Tick {
+        let prev = self.last_run;
+        self.last_run = current;
+        prev
+    }
+}

@@ -12,6 +12,7 @@
 
 pub mod archetype;
 pub mod bundle;
+pub mod change;
 pub mod commands;
 pub mod component;
 pub mod entity;
@@ -26,12 +27,13 @@ pub mod world;
 
 pub use archetype::ArchetypeId;
 pub use bundle::Bundle;
+pub use change::Tick;
 pub use commands::Commands;
 pub use component::{Component, ComponentId};
 pub use entity::Entity;
 pub use error::{EcsError, EcsResult};
 pub use events::{Event, EventReader, EventWriter, Events};
-pub use query::filter::{QueryFilter, With, Without};
+pub use query::filter::{Added, Changed, QueryFilter, With, Without};
 pub use query::{Query, QueryData, QueryIter, QueryIterMut};
 pub use reflect::{
     FieldDesc, FieldKind, FieldValue, Reflect, ReflectError, ReflectResult, ReflectedComponent,

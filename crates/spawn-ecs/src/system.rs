@@ -168,7 +168,7 @@ pub trait SystemParam {
 }
 
 impl<Q: QueryData, F: QueryFilter + 'static> SystemParam for Query<'_, Q, F> {
-    type State = ();
+    type State = crate::query::QueryState;
     type Item<'w, 's> = Query<'w, Q, F>;
 
     fn resolve_access(world: &World, access: &mut Access) -> EcsResult<()> {
@@ -194,8 +194,12 @@ impl<Q: QueryData, F: QueryFilter + 'static> SystemParam for Query<'_, Q, F> {
         }
     }
 
-    fn get<'w>(world: &'w World, _state: &mut ()) -> EcsResult<Query<'w, Q, F>> {
-        Ok(world.query_param::<Q, F>())
+    fn get<'w>(
+        world: &'w World,
+        state: &mut crate::query::QueryState,
+    ) -> EcsResult<Query<'w, Q, F>> {
+        let last_run = state.take_last_run(world.change_tick());
+        Ok(world.query_param::<Q, F>(last_run))
     }
 }
 

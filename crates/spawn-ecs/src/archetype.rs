@@ -2,8 +2,12 @@
 //! holding one SoA column per component plus a parallel `Vec<Entity>`.
 //!
 //! Rows move between archetypes on `insert`/`remove` via swap-remove + push of
-//! boxed values; layout and columns are private internals.
+//! boxed values; layout and columns are private internals. Per-row change-detection
+//! ticks ([`ArchetypeTicks`]) are stored in the [`ArchetypeStore`] parallel to the
+//! archetypes — not inside the type-erased column — so a filtered `iter_mut` can
+//! read ticks (shared) while mutating columns (exclusive) without `unsafe`.
 
+use crate::change::Tick;
 use crate::component::{AnyValue, ComponentColumn, ComponentId};
 use crate::entity::Entity;
 use std::collections::HashMap;
@@ -63,10 +67,9 @@ impl Archetype {
     }
 
     /// Returns the entities slice together with the `wanted` component columns
-    /// (each `Some` if present, `None` if its id is `None`/absent), borrowed
-    /// disjointly. Entities come from a separate field, so a mutable tuple query
-    /// can read entity ids while holding mutable column borrows — all without
-    /// `unsafe`.
+    /// (each `Some` if present), borrowed disjointly. Entities come from a separate
+    /// field, so a mutable tuple query can read entity ids while holding mutable
+    /// column borrows — all without `unsafe`.
     pub(crate) fn entities_and_columns_mut<const N: usize>(
         &mut self,
         wanted: [Option<ComponentId>; N],
@@ -81,6 +84,8 @@ impl Archetype {
 fn col_index(components: &[ComponentId], id: ComponentId) -> Option<usize> {
     components.binary_search(&id).ok()
 }
+
+type ExtractedRow = (Vec<(ComponentId, AnyValue)>, Vec<(ComponentId, Tick)>);
 
 /// Peels the requested columns out of `columns` as disjoint mutable borrows by
 /// walking front-to-back in ascending index order; no `unsafe`, no allocation.
@@ -110,11 +115,56 @@ fn peel_columns<'a, const N: usize>(
     out
 }
 
-/// Holds every archetype and the entity-location map.
+/// Per-archetype change-detection ticks, held parallel to the archetype's columns
+/// (one `added`/`changed` tick per row per column).
+///
+/// `#[doc(hidden)] pub` only so the sealed [`QueryFilter`](crate::query::filter::QueryFilter)
+/// trait can name it; not stable surface.
+#[doc(hidden)]
+pub struct ArchetypeTicks {
+    components: Vec<ComponentId>,
+    added: Vec<Vec<Tick>>,
+    changed: Vec<Vec<Tick>>,
+}
+
+impl ArchetypeTicks {
+    fn empty() -> Self {
+        Self {
+            components: Vec::new(),
+            added: Vec::new(),
+            changed: Vec::new(),
+        }
+    }
+
+    fn for_set(components: &[ComponentId]) -> Self {
+        let n = components.len();
+        Self {
+            components: components.to_vec(),
+            added: vec![Vec::new(); n],
+            changed: vec![Vec::new(); n],
+        }
+    }
+
+    fn col(&self, id: ComponentId) -> Option<usize> {
+        self.components.binary_search(&id).ok()
+    }
+
+    /// The tick `T` was added on `entity`'s row, or `None` if `id` is absent.
+    pub(crate) fn added_at(&self, id: ComponentId, row: usize) -> Option<Tick> {
+        self.col(id).and_then(|c| self.added[c].get(row).copied())
+    }
+
+    /// The tick `T` was last changed on `entity`'s row, or `None` if `id` is absent.
+    pub(crate) fn changed_at(&self, id: ComponentId, row: usize) -> Option<Tick> {
+        self.col(id).and_then(|c| self.changed[c].get(row).copied())
+    }
+}
+
+/// Holds every archetype, its parallel change ticks, and the entity-location map.
 pub(crate) struct ArchetypeStore {
     archetypes: Vec<Archetype>,
+    ticks: Vec<ArchetypeTicks>,
     by_set: HashMap<Vec<ComponentId>, ArchetypeId>,
-    /// `entity index -> (archetype, row)` for live entities.
     locations: Vec<Option<(ArchetypeId, usize)>>,
 }
 
@@ -129,6 +179,7 @@ impl ArchetypeStore {
         by_set.insert(Vec::new(), ArchetypeId::new(0));
         Self {
             archetypes: vec![empty],
+            ticks: vec![ArchetypeTicks::empty()],
             by_set,
             locations: Vec::new(),
         }
@@ -154,8 +205,52 @@ impl ArchetypeStore {
         &self.archetypes
     }
 
-    pub(crate) fn archetypes_mut(&mut self) -> &mut [Archetype] {
-        &mut self.archetypes
+    pub(crate) fn ticks(&self) -> &[ArchetypeTicks] {
+        &self.ticks
+    }
+
+    pub(crate) fn tick(&self, id: ArchetypeId) -> &ArchetypeTicks {
+        &self.ticks[id.index()]
+    }
+
+    /// Disjoint split borrow of the archetypes (mutable, for column access) and
+    /// their ticks (shared, for change filtering) — the seam that lets a filtered
+    /// `iter_mut` evaluate ticks while mutating columns without `unsafe`.
+    pub(crate) fn archetypes_and_ticks_mut(&mut self) -> (&mut [Archetype], &[ArchetypeTicks]) {
+        (&mut self.archetypes, &self.ticks)
+    }
+
+    /// Stamps the changed tick of `component` on a single row.
+    pub(crate) fn mark_changed(
+        &mut self,
+        id: ArchetypeId,
+        component: ComponentId,
+        row: usize,
+        tick: Tick,
+    ) {
+        let t = &mut self.ticks[id.index()];
+        if let Some(col) = t.col(component) {
+            if let Some(slot) = t.changed[col].get_mut(row) {
+                *slot = tick;
+            }
+        }
+    }
+
+    /// Stamps the changed tick of `component` on every row of the archetype —
+    /// the conservative mutable-access stamp applied when an exclusive iterator
+    /// over that column is created.
+    pub(crate) fn stamp_changed_all(
+        &mut self,
+        id: ArchetypeId,
+        component: ComponentId,
+        tick: Tick,
+    ) {
+        let t = &mut self.ticks[id.index()];
+        if let Some(col) = t.col(component) {
+            for slot in t.changed[col].iter_mut() {
+                *slot = tick;
+            }
+        }
     }
 
     pub(crate) fn location(&self, entity: Entity) -> Option<(ArchetypeId, usize)> {
@@ -174,7 +269,7 @@ impl ArchetypeStore {
     }
 
     /// Returns the archetype id for the sorted `components` set, creating it (and
-    /// its columns via `factory`) if unseen.
+    /// its columns + tick matrix) if unseen.
     fn get_or_create<F>(&mut self, components: Vec<ComponentId>, mut factory: F) -> ArchetypeId
     where
         F: FnMut(ComponentId) -> Box<dyn ComponentColumn>,
@@ -185,6 +280,7 @@ impl ArchetypeStore {
         let id = ArchetypeId::new(self.archetypes.len() as u32);
         let columns: Vec<Box<dyn ComponentColumn>> =
             components.iter().map(|&cid| factory(cid)).collect();
+        self.ticks.push(ArchetypeTicks::for_set(&components));
         self.by_set.insert(components.clone(), id);
         self.archetypes.push(Archetype {
             components,
@@ -203,10 +299,18 @@ impl ArchetypeStore {
     }
 
     /// Removes an entity's row, returning its `(component id, boxed value)` pairs
-    /// in column order and fixing up the swapped-in row's location. Returns
-    /// `None` if the entity had no location.
-    fn extract_row(&mut self, entity: Entity) -> Option<Vec<(ComponentId, AnyValue)>> {
+    /// and its per-component added ticks, fixing up the swapped-in row's location
+    /// and ticks. Returns `None` if the entity had no location.
+    fn extract_row(&mut self, entity: Entity) -> Option<ExtractedRow> {
         let (aid, row) = self.location(entity)?;
+        let added_ticks: Vec<(ComponentId, Tick)> = {
+            let t = &self.ticks[aid.index()];
+            t.components
+                .iter()
+                .enumerate()
+                .map(|(col, &cid)| (cid, t.added[col][row]))
+                .collect()
+        };
         let arch = &mut self.archetypes[aid.index()];
         let mut pairs = Vec::with_capacity(arch.columns.len());
         for (col, &cid) in arch.columns.iter_mut().zip(arch.components.iter()) {
@@ -218,7 +322,12 @@ impl ArchetypeStore {
             self.set_location(moved, Some((aid, row)));
         }
         self.set_location(entity, None);
-        Some(pairs)
+        let t = &mut self.ticks[aid.index()];
+        for col in 0..t.components.len() {
+            t.added[col].swap_remove(row);
+            t.changed[col].swap_remove(row);
+        }
+        Some((pairs, added_ticks))
     }
 
     /// Despawns an entity's storage row. Returns `false` if it had no location.
@@ -227,22 +336,26 @@ impl ArchetypeStore {
     }
 
     /// Moves `entity` into the archetype whose set is its current set plus the
-    /// keys of `overrides`, carrying every surviving value forward. Values in
-    /// `overrides` replace existing ones; new component ids extend the set.
-    /// `factory` builds fresh columns for any newly created archetype. The
-    /// entity must currently be placed.
+    /// keys of `overrides`, carrying every surviving value (and its added tick)
+    /// forward. New/overwritten components stamp `changed = current_tick`; newly
+    /// inserted components also stamp `added = current_tick`.
     pub(crate) fn insert_components<F>(
         &mut self,
         entity: Entity,
         overrides: Vec<(ComponentId, AnyValue)>,
+        current_tick: Tick,
         factory: F,
     ) where
         F: FnMut(ComponentId) -> Box<dyn ComponentColumn>,
     {
         let mut carried: HashMap<ComponentId, AnyValue> = HashMap::new();
-        if let Some(pairs) = self.extract_row(entity) {
+        let mut carried_added: HashMap<ComponentId, Tick> = HashMap::new();
+        if let Some((pairs, added)) = self.extract_row(entity) {
             for (cid, val) in pairs {
                 carried.insert(cid, val);
+            }
+            for (cid, tick) in added {
+                carried_added.insert(cid, tick);
             }
         }
         for (cid, val) in overrides {
@@ -250,23 +363,24 @@ impl ArchetypeStore {
         }
         let mut set: Vec<ComponentId> = carried.keys().copied().collect();
         set.sort_unstable();
-        self.write_row(entity, set, carried, factory);
+        self.write_row(entity, set, carried, carried_added, current_tick, factory);
     }
 
     /// Moves `entity` to the archetype with `id` removed, dropping that value.
-    /// Returns the removed boxed value, or `None` if absent. The entity must be
-    /// placed.
+    /// Returns the removed boxed value, or `None` if absent.
     pub(crate) fn remove_component<F>(
         &mut self,
         entity: Entity,
         id: ComponentId,
+        current_tick: Tick,
         factory: F,
     ) -> Option<AnyValue>
     where
         F: FnMut(ComponentId) -> Box<dyn ComponentColumn>,
     {
-        let pairs = self.extract_row(entity)?;
+        let (pairs, added) = self.extract_row(entity)?;
         let mut carried: HashMap<ComponentId, AnyValue> = HashMap::new();
+        let mut carried_added: HashMap<ComponentId, Tick> = HashMap::new();
         let mut removed = None;
         for (cid, val) in pairs {
             if cid == id {
@@ -275,9 +389,14 @@ impl ArchetypeStore {
                 carried.insert(cid, val);
             }
         }
+        for (cid, tick) in added {
+            if cid != id {
+                carried_added.insert(cid, tick);
+            }
+        }
         let mut set: Vec<ComponentId> = carried.keys().copied().collect();
         set.sort_unstable();
-        self.write_row(entity, set, carried, factory);
+        self.write_row(entity, set, carried, carried_added, current_tick, factory);
         removed
     }
 
@@ -286,6 +405,8 @@ impl ArchetypeStore {
         entity: Entity,
         set: Vec<ComponentId>,
         mut values: HashMap<ComponentId, AnyValue>,
+        carried_added: HashMap<ComponentId, Tick>,
+        current_tick: Tick,
         factory: F,
     ) where
         F: FnMut(ComponentId) -> Box<dyn ComponentColumn>,
@@ -300,5 +421,11 @@ impl ArchetypeStore {
             }
         }
         self.set_location(entity, Some((target, row)));
+        let t = &mut self.ticks[target.index()];
+        for (col_idx, cid) in set.iter().enumerate() {
+            let added = carried_added.get(cid).copied().unwrap_or(current_tick);
+            t.added[col_idx].push(added);
+            t.changed[col_idx].push(current_tick);
+        }
     }
 }

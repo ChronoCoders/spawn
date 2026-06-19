@@ -7,6 +7,7 @@
 
 use crate::archetype::ArchetypeStore;
 use crate::bundle::Bundle;
+use crate::change::Tick;
 use crate::commands::{Command, CommandBuffer, Commands};
 use crate::component::{
     column_slice, column_slice_mut, AnyValue, Component, ComponentId, ComponentRegistry,
@@ -26,6 +27,7 @@ pub struct World {
     archetypes: ArchetypeStore,
     command_buffer: CommandBuffer,
     resources: Resources,
+    change_tick: Tick,
     event_updaters: Vec<fn(&mut World)>,
 }
 
@@ -45,6 +47,7 @@ impl World {
             archetypes: ArchetypeStore::new(),
             command_buffer: CommandBuffer::new(),
             resources: Resources::new(),
+            change_tick: Tick::ZERO.next(),
             event_updaters: Vec::new(),
         }
     }
@@ -55,6 +58,19 @@ impl World {
 
     pub(crate) fn allocator(&self) -> &EntityAllocator {
         &self.allocator
+    }
+
+    /// The world's current frame change tick.
+    pub fn change_tick(&self) -> Tick {
+        self.change_tick
+    }
+
+    /// Advances the change tick by one and returns the new value. Called once per
+    /// frame by [`Schedule::run`](crate::schedule::Schedule::run); call it
+    /// directly when driving more than one schedule per frame.
+    pub fn increment_change_tick(&mut self) -> Tick {
+        self.change_tick = self.change_tick.next();
+        self.change_tick
     }
 
     /// Registers `T`, returning its dense id. Idempotent: re-registering returns
@@ -202,6 +218,8 @@ impl World {
         }
         let id = self.registry.component_id::<T>()?;
         let (aid, row) = self.archetypes.location(entity)?;
+        let tick = self.change_tick;
+        self.archetypes.mark_changed(aid, id, row, tick);
         let column = self.archetypes.archetype_mut(aid).column_mut(id)?;
         column_slice_mut::<T>(column)?.get_mut(row)
     }
@@ -218,18 +236,20 @@ impl World {
 
     /// A read-only query; `Q` must be read-only data.
     pub fn query<Q: QueryData>(&self) -> Query<'_, Q, ()> {
-        Query::new_shared(&self.archetypes, &self.registry)
+        Query::new_shared(&self.archetypes, &self.registry, Tick::ZERO)
     }
 
     /// A query permitting `&mut T` data.
     pub fn query_mut<Q: QueryData>(&mut self) -> Query<'_, Q, ()> {
-        Query::new_exclusive(&mut self.archetypes, &self.registry)
+        let tick = self.change_tick;
+        Query::new_exclusive(&mut self.archetypes, &self.registry, tick)
     }
 
     pub(crate) fn query_param<Q: QueryData, F: crate::query::filter::QueryFilter>(
         &self,
+        last_run: Tick,
     ) -> Query<'_, Q, F> {
-        Query::new_shared(&self.archetypes, &self.registry)
+        Query::new_shared(&self.archetypes, &self.registry, last_run)
     }
 
     /// A world-level command buffer; queued ops are applied by
@@ -345,14 +365,16 @@ impl World {
 
     fn apply_inserts(&mut self, entity: Entity, pairs: Vec<(ComponentId, AnyValue)>) {
         let registry = &self.registry;
+        let tick = self.change_tick;
         self.archetypes
-            .insert_components(entity, pairs, |cid| new_column(registry, cid));
+            .insert_components(entity, pairs, tick, |cid| new_column(registry, cid));
     }
 
     fn apply_remove(&mut self, entity: Entity, id: ComponentId) -> Option<AnyValue> {
         let registry = &self.registry;
+        let tick = self.change_tick;
         self.archetypes
-            .remove_component(entity, id, |cid| new_column(registry, cid))
+            .remove_component(entity, id, tick, |cid| new_column(registry, cid))
     }
 }
 

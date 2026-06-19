@@ -240,6 +240,7 @@ impl Schedule {
     /// joins) and is returned; that stage's pending command buffers are discarded
     /// and the event swap is skipped for that frame.
     pub fn run(&mut self, world: &mut World) -> EcsResult<()> {
+        world.increment_change_tick();
         self.run_stages(world)?;
         world.update_events();
         Ok(())
