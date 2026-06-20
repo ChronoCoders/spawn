@@ -38,6 +38,16 @@ pub(crate) enum Command {
     RemoveResource {
         remove: fn(&mut World),
     },
+    SetParent {
+        child: Entity,
+        parent: Entity,
+    },
+    RemoveParent {
+        child: Entity,
+    },
+    DespawnRecursive {
+        entity: Entity,
+    },
 }
 
 /// Monomorphic applier for a deferred resource insert: downcasts the erased
@@ -156,6 +166,26 @@ impl<'w> Commands<'w> {
         self.buffer.commands.push(Command::RemoveResource {
             remove: apply_remove_resource::<T>,
         });
+    }
+
+    /// Records a deferred reparent applied at the stage boundary. A cycle or a
+    /// dead target is a no-op at apply time (commands cannot return errors).
+    pub fn set_parent(&mut self, child: Entity, parent: Entity) {
+        self.buffer
+            .commands
+            .push(Command::SetParent { child, parent });
+    }
+
+    /// Records a deferred detach of `child` from its current parent.
+    pub fn remove_parent(&mut self, child: Entity) {
+        self.buffer.commands.push(Command::RemoveParent { child });
+    }
+
+    /// Records a deferred recursive despawn of `entity` and its whole subtree.
+    pub fn despawn_recursive(&mut self, entity: Entity) {
+        self.buffer
+            .commands
+            .push(Command::DespawnRecursive { entity });
     }
 
     fn write_bundle<B: Bundle>(&self, bundle: B) -> Vec<(ComponentId, AnyValue)> {

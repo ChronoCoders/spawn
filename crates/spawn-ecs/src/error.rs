@@ -64,6 +64,12 @@ pub enum EcsError {
         /// Type name of the component.
         component: &'static str,
     },
+    /// A reparent was rejected because it would form a cycle (the parent is the
+    /// child itself or one of its descendants).
+    HierarchyCycle {
+        /// The child whose reparent was rejected.
+        entity: Entity,
+    },
 }
 
 impl fmt::Display for EcsError {
@@ -95,6 +101,14 @@ impl fmt::Display for EcsError {
             Self::UnknownWireId { wire } => write!(f, "unknown wire id: {wire}"),
             Self::ComponentNotSerializable { component } => {
                 write!(f, "component not serializable: {component}")
+            }
+            Self::HierarchyCycle { entity } => {
+                write!(
+                    f,
+                    "hierarchy cycle rejected for entity: index {} generation {}",
+                    entity.index(),
+                    entity.generation()
+                )
             }
         }
     }
@@ -133,6 +147,9 @@ mod tests {
             EcsError::Serialize(spawn_serialize::SerializeError::EndOfStream),
             EcsError::UnknownWireId { wire: 7 },
             EcsError::ComponentNotSerializable { component: "C" },
+            EcsError::HierarchyCycle {
+                entity: Entity::PLACEHOLDER,
+            },
         ];
         for v in &variants {
             assert!(!v.to_string().is_empty());

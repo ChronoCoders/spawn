@@ -15,6 +15,7 @@ use crate::component::{
 use crate::entity::{Entity, EntityAllocator};
 use crate::error::{EcsError, EcsResult};
 use crate::events::Event;
+use crate::hierarchy::{Children, Parent};
 use crate::query::{Query, QueryData};
 use crate::reflect::{FieldValue, Reflect, ReflectRegistry, ReflectResult, ReflectedComponent};
 use crate::resource::{Res, ResMut, Resource, ResourceId, Resources};
@@ -187,6 +188,124 @@ impl World {
         for entity in live {
             let _ = self.despawn(entity);
         }
+    }
+
+    /// Sets `child`'s parent to `parent`, keeping both `Parent` and `Children`
+    /// consistent. `EntityNotFound` if either is not live; `HierarchyCycle` if
+    /// `parent` is `child` or one of its descendants.
+    pub fn set_parent(&mut self, child: Entity, parent: Entity) -> EcsResult<()> {
+        if !self.contains(child) {
+            return Err(EcsError::EntityNotFound { entity: child });
+        }
+        if !self.contains(parent) {
+            return Err(EcsError::EntityNotFound { entity: parent });
+        }
+        if self.would_cycle(parent, child) {
+            return Err(EcsError::HierarchyCycle { entity: child });
+        }
+        if let Some(old) = self.parent(child) {
+            if old == parent {
+                return Ok(());
+            }
+            if let Some(children) = self.get_mut::<Children>(old) {
+                children.remove(child);
+            }
+        }
+        let _ = self.insert(child, Parent::new(parent));
+        if let Some(children) = self.get_mut::<Children>(parent) {
+            if !children.contains(child) {
+                children.push(child);
+            }
+        } else {
+            let _ = self.insert(parent, Children::single(child));
+        }
+        Ok(())
+    }
+
+    /// Detaches `child` from its current parent (both sides). `Ok` no-op if it has
+    /// no parent.
+    pub fn remove_parent(&mut self, child: Entity) -> EcsResult<()> {
+        if let Some(old) = self.parent(child) {
+            if let Some(children) = self.get_mut::<Children>(old) {
+                children.remove(child);
+            }
+            let _ = self.remove::<Parent>(child);
+        }
+        Ok(())
+    }
+
+    /// Convenience for [`set_parent(child, parent)`](World::set_parent).
+    pub fn add_child(&mut self, parent: Entity, child: Entity) -> EcsResult<()> {
+        self.set_parent(child, parent)
+    }
+
+    /// The entity's children in insertion order, or an empty slice. May contain
+    /// dead ids until the next hierarchy op or propagation prunes them.
+    pub fn children(&self, entity: Entity) -> &[Entity] {
+        match self.get::<Children>(entity) {
+            Some(children) => children.as_slice(),
+            None => &[],
+        }
+    }
+
+    /// The entity's parent, if any.
+    pub fn parent(&self, entity: Entity) -> Option<Entity> {
+        self.get::<Parent>(entity).map(|p| p.get())
+    }
+
+    /// Despawns `entity` and its whole subtree (post-order), detaching it from its
+    /// own parent first. `EntityNotFound` if `entity` is not live.
+    pub fn despawn_recursive(&mut self, entity: Entity) -> EcsResult<()> {
+        if !self.contains(entity) {
+            return Err(EcsError::EntityNotFound { entity });
+        }
+        if let Some(parent) = self.parent(entity) {
+            if let Some(children) = self.get_mut::<Children>(parent) {
+                children.remove(entity);
+            }
+        }
+        for victim in self.subtree_postorder(entity) {
+            let _ = self.despawn(victim);
+        }
+        Ok(())
+    }
+
+    fn would_cycle(&self, parent: Entity, child: Entity) -> bool {
+        let cap = self.entity_count() + 1;
+        let mut cursor = Some(parent);
+        let mut steps = 0;
+        while let Some(current) = cursor {
+            if current == child {
+                return true;
+            }
+            steps += 1;
+            if steps > cap {
+                return true;
+            }
+            cursor = self.parent(current);
+        }
+        false
+    }
+
+    fn subtree_postorder(&self, root: Entity) -> Vec<Entity> {
+        let mut out = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if !visited.insert(entity) {
+                continue;
+            }
+            out.push(entity);
+            if let Some(children) = self.get::<Children>(entity) {
+                for child in children.iter() {
+                    if self.contains(child) && !visited.contains(&child) {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
+        out.reverse();
+        out
     }
 
     pub fn spawn(&mut self) -> Entity {
@@ -414,6 +533,15 @@ impl World {
                 }
                 Command::InsertResource { apply, value } => apply(self, value),
                 Command::RemoveResource { remove } => remove(self),
+                Command::SetParent { child, parent } => {
+                    let _ = self.set_parent(child, parent);
+                }
+                Command::RemoveParent { child } => {
+                    let _ = self.remove_parent(child);
+                }
+                Command::DespawnRecursive { entity } => {
+                    let _ = self.despawn_recursive(entity);
+                }
             }
         }
     }

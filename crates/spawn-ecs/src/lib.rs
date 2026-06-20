@@ -18,6 +18,7 @@ pub mod component;
 pub mod entity;
 pub mod error;
 pub mod events;
+pub mod hierarchy;
 pub mod query;
 pub mod reflect;
 pub mod resource;
@@ -34,6 +35,7 @@ pub use component::{Component, ComponentId};
 pub use entity::Entity;
 pub use error::{EcsError, EcsResult};
 pub use events::{Event, EventReader, EventWriter, Events};
+pub use hierarchy::{propagate_transforms, Children, GlobalTransform3D, Parent};
 pub use query::filter::{Added, Changed, QueryFilter, With, Without};
 pub use query::{Query, QueryData, QueryIter, QueryIterMut};
 pub use reflect::{
