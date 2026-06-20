@@ -18,6 +18,8 @@ use crate::events::Event;
 use crate::query::{Query, QueryData};
 use crate::reflect::{FieldValue, Reflect, ReflectRegistry, ReflectResult, ReflectedComponent};
 use crate::resource::{Res, ResMut, Resource, ResourceId, Resources};
+use crate::serialize::{EntityMap, MapEntities, SerializeComponent, SerializeRegistry};
+use spawn_serialize::SerializeResult;
 
 /// Container of all entities, components, and archetype storage.
 pub struct World {
@@ -27,6 +29,7 @@ pub struct World {
     archetypes: ArchetypeStore,
     command_buffer: CommandBuffer,
     resources: Resources,
+    serialize: SerializeRegistry,
     change_tick: Tick,
     event_updaters: Vec<fn(&mut World)>,
 }
@@ -47,6 +50,7 @@ impl World {
             archetypes: ArchetypeStore::new(),
             command_buffer: CommandBuffer::new(),
             resources: Resources::new(),
+            serialize: SerializeRegistry::new(),
             change_tick: Tick::ZERO.next(),
             event_updaters: Vec::new(),
         }
@@ -132,6 +136,57 @@ impl World {
     ) -> ReflectResult<()> {
         let set = self.reflect.set_fn(component)?;
         set(self, entity, field, value)
+    }
+
+    /// Registers `T` as a serializable component (idempotent), assigning its
+    /// on-wire id in registration order. Both a saved world and the world loading
+    /// it must register the same serializable components in the same order.
+    pub fn register_serializable<T: SerializeComponent>(&mut self) -> ComponentId {
+        let id = self.registry.register::<T>();
+        self.serialize.insert::<T>(id);
+        id
+    }
+
+    /// As [`register_serializable`](World::register_serializable), but records a
+    /// remap hook so `T`'s [`Entity`] references are translated to their loaded
+    /// counterparts after [`deserialize_world`](World::deserialize_world).
+    pub fn register_serializable_mapped<T: SerializeComponent + MapEntities>(
+        &mut self,
+    ) -> ComponentId {
+        let id = self.registry.register::<T>();
+        self.serialize.insert_mapped::<T>(id, |world, entity, map| {
+            if let Some(component) = world.get_mut::<T>(entity) {
+                component.map_entities(map);
+            }
+        });
+        id
+    }
+
+    /// Whether `component` has a registered serialize codec.
+    pub fn is_serializable(&self, component: ComponentId) -> bool {
+        self.serialize.is_serializable(component)
+    }
+
+    /// Serializes every live entity and its registered serializable components to
+    /// a byte buffer. Non-serializable components are skipped. Deterministic:
+    /// identical world + registration order yields identical bytes.
+    pub fn serialize_world(&self) -> SerializeResult<Vec<u8>> {
+        self.serialize.encode(self)
+    }
+
+    /// Clears the world's entities (keeping registrations) and repopulates it from
+    /// `bytes`, returning the original-to-loaded [`EntityMap`]. The world must have
+    /// the same serializable types registered in the same order as the saved one.
+    pub fn deserialize_world(&mut self, bytes: &[u8]) -> EcsResult<EntityMap> {
+        let decoders = self.serialize.decoders();
+        crate::serialize::decode(self, &decoders, bytes)
+    }
+
+    pub(crate) fn clear_entities(&mut self) {
+        let live: Vec<Entity> = self.query::<Entity>().iter().collect();
+        for entity in live {
+            let _ = self.despawn(entity);
+        }
     }
 
     pub fn spawn(&mut self) -> Entity {

@@ -18,6 +18,7 @@ pub mod error;
 pub mod geom;
 pub mod pack;
 pub mod stream;
+mod transform;
 
 pub use bits::{BitReader, BitWriter};
 pub use error::{SerializeError, SerializeResult};

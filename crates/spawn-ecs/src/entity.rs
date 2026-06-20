@@ -44,6 +44,10 @@ impl Entity {
     pub const fn is_placeholder(self) -> bool {
         self.index == u32::MAX && self.generation == 0
     }
+
+    pub(crate) const fn from_raw(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
 }
 
 /// Per-slot allocation state.

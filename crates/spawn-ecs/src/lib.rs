@@ -22,6 +22,7 @@ pub mod query;
 pub mod reflect;
 pub mod resource;
 pub mod schedule;
+pub mod serialize;
 pub mod system;
 pub mod world;
 
@@ -40,5 +41,6 @@ pub use reflect::{
 };
 pub use resource::{Res, ResMut, Resource, ResourceId};
 pub use schedule::{Schedule, Stage};
+pub use serialize::{serialize_entity, EntityMap, MapEntities, SerializeComponent, WireId};
 pub use system::{Access, ComponentMask, IntoSystem, System, SystemParam};
 pub use world::World;

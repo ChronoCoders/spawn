@@ -51,6 +51,19 @@ pub enum EcsError {
         /// Type name of the uninitialized event.
         event: &'static str,
     },
+    /// A whole-world (de)serialization codec failure (e.g. a truncated buffer).
+    Serialize(spawn_serialize::SerializeError),
+    /// A loaded payload named a wire id not registered in this world — the
+    /// registration-order-mismatch diagnostic.
+    UnknownWireId {
+        /// The unregistered on-wire component index.
+        wire: u16,
+    },
+    /// A component was asked to serialize but has no registered codec.
+    ComponentNotSerializable {
+        /// Type name of the component.
+        component: &'static str,
+    },
 }
 
 impl fmt::Display for EcsError {
@@ -78,11 +91,22 @@ impl fmt::Display for EcsError {
             Self::EventsNotInitialized { event } => {
                 write!(f, "events not initialized: {event}")
             }
+            Self::Serialize(err) => write!(f, "serialize: {err}"),
+            Self::UnknownWireId { wire } => write!(f, "unknown wire id: {wire}"),
+            Self::ComponentNotSerializable { component } => {
+                write!(f, "component not serializable: {component}")
+            }
         }
     }
 }
 
 impl Error for EcsError {}
+
+impl From<spawn_serialize::SerializeError> for EcsError {
+    fn from(err: spawn_serialize::SerializeError) -> Self {
+        EcsError::Serialize(err)
+    }
+}
 
 /// Result alias for fallible ECS operations.
 pub type EcsResult<T> = Result<T, EcsError>;
@@ -106,6 +130,9 @@ mod tests {
             EcsError::ScheduleNotBuilt,
             EcsError::ResourceNotRegistered { resource: "R" },
             EcsError::EventsNotInitialized { event: "E" },
+            EcsError::Serialize(spawn_serialize::SerializeError::EndOfStream),
+            EcsError::UnknownWireId { wire: 7 },
+            EcsError::ComponentNotSerializable { component: "C" },
         ];
         for v in &variants {
             assert!(!v.to_string().is_empty());

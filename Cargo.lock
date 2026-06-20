@@ -2435,6 +2435,7 @@ name = "spawn-ecs"
 version = "0.1.0"
 dependencies = [
  "spawn-core",
+ "spawn-serialize",
 ]
 
 [[package]]
