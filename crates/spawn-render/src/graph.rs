@@ -74,6 +74,15 @@ pub enum PassKind {
     ForwardOpaque,
     ShadowDepth,
     ForwardLit,
+    /// Physically based forward pass: Cook-Torrance shading (GGX/Smith/Fresnel +
+    /// energy-conserving Lambert) with the group-2 directional light + PCF shadow,
+    /// writing the linear HDR scene transient. The tonemap pass reduces it to the
+    /// LDR surface.
+    ForwardPbr,
+    /// Fullscreen tonemap: samples the linear HDR scene transient and writes the
+    /// LDR surface. No vertex buffer (the triangle is generated in the shader), no
+    /// depth, no cull.
+    Tonemap,
     /// 2D overlay: rasterizes a `spawn_ui` draw list (rects, borders, text,
     /// scissors) plus editor line geometry (gizmos, selection) onto the surface
     /// after the lit scene. No depth; alpha-blended; loads (composites over) the
@@ -294,12 +303,22 @@ impl RenderGraph {
             .and_then(|p| p.depth)
             .and_then(|d| resource_pool.get(d.target.index()).copied().flatten())
             .map(|region| renderer.create_light_bind_group(&pool[region].view));
+        // The tonemap pass samples the HDR scene transient it reads. Its group-0
+        // bind group is built here (compile/resize), never per frame.
+        let tonemap_bind_group = self
+            .passes
+            .iter()
+            .find(|p| p.kind == PassKind::Tonemap)
+            .and_then(|p| p.reads.first().copied())
+            .and_then(|id| resource_pool.get(id.index()).copied().flatten())
+            .map(|region| renderer.create_fullscreen_bind_group(&pool[region].view));
         Ok(CompiledGraph {
             order: plan.order.clone(),
             passes: self.passes.clone(),
             pool,
             resource_pool,
             light_bind_group,
+            tonemap_bind_group,
             plan,
             size,
         })
@@ -437,6 +456,7 @@ pub struct CompiledGraph {
     pool: Vec<PoolTexture>,
     resource_pool: Vec<Option<usize>>,
     light_bind_group: Option<wgpu::BindGroup>,
+    tonemap_bind_group: Option<wgpu::BindGroup>,
     plan: GraphPlan,
     size: SurfaceSize,
 }
@@ -468,6 +488,13 @@ impl CompiledGraph {
     /// Built at compile/resize and reused every frame.
     pub(crate) fn light_bind_group(&self) -> Option<&wgpu::BindGroup> {
         self.light_bind_group.as_ref()
+    }
+
+    /// The tonemap pass's group-0 bind group (sampling the HDR scene transient),
+    /// present when the graph has a tonemap pass. Built at compile/resize and
+    /// reused every frame.
+    pub(crate) fn tonemap_bind_group(&self) -> Option<&wgpu::BindGroup> {
+        self.tonemap_bind_group.as_ref()
     }
 
     /// Re-sizes surface-relative transients and re-derives the aliasing plan.
@@ -661,6 +688,101 @@ mod tests {
             u64::from(1024u32 * 1024 * 4),
             "shadow map sized at its fixed resolution"
         );
+    }
+
+    #[test]
+    fn pbr_graph_derives_shadow_then_pbr_then_tonemap() {
+        // Declared out of order; derivation must order shadow → PBR → tonemap from
+        // the read/write dependencies (PBR reads the shadow map and writes the HDR
+        // scene; tonemap reads the HDR scene and writes the surface).
+        let mut g = RenderGraph::new();
+        let shadow = g.transient(ResourceDesc {
+            name: "shadow-map",
+            format: TextureFormat::Depth32Float,
+            size: SizeSpec::Fixed {
+                width: 1024,
+                height: 1024,
+            },
+            kind: ResourceKind::Depth,
+        });
+        let hdr = g.transient(ResourceDesc {
+            name: "scene-hdr",
+            format: TextureFormat::Rgba16Float,
+            size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+            kind: ResourceKind::Color,
+        });
+        g.add_pass(PassDesc {
+            name: "tonemap",
+            kind: PassKind::Tonemap,
+            reads: vec![hdr],
+            color: Some(ColorWrite {
+                target: g.surface(),
+                clear: Some(Color::BLACK),
+            }),
+            depth: None,
+        });
+        g.add_pass(PassDesc {
+            name: "pbr",
+            kind: PassKind::ForwardPbr,
+            reads: vec![shadow],
+            color: Some(ColorWrite {
+                target: hdr,
+                clear: Some(Color::BLACK),
+            }),
+            depth: Some(DepthWrite {
+                target: g.primary_depth(),
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        g.add_pass(PassDesc {
+            name: "shadow",
+            kind: PassKind::ShadowDepth,
+            reads: Vec::new(),
+            color: None,
+            depth: Some(DepthWrite {
+                target: shadow,
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        let plan = g.plan(SIZE).unwrap();
+        assert_eq!(
+            plan.order,
+            vec![2, 1, 0],
+            "shadow (2) → pbr (1) → tonemap (0)"
+        );
+        // The shadow map and HDR scene transients are both live, so they cannot
+        // alias; transient memory equals their sum.
+        let hdr_bytes = u64::from(SIZE.width) * u64::from(SIZE.height) * 8;
+        let shadow_bytes = u64::from(1024u32 * 1024 * 4);
+        assert_eq!(plan.transient_memory, hdr_bytes + shadow_bytes);
+        assert_eq!(plan.naive_memory, plan.transient_memory);
+    }
+
+    #[test]
+    fn tonemap_reading_unproduced_hdr_is_rejected() {
+        let mut g = RenderGraph::new();
+        let hdr = g.transient(ResourceDesc {
+            name: "scene-hdr",
+            format: TextureFormat::Rgba16Float,
+            size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+            kind: ResourceKind::Color,
+        });
+        g.add_pass(PassDesc {
+            name: "tonemap",
+            kind: PassKind::Tonemap,
+            reads: vec![hdr],
+            color: Some(ColorWrite {
+                target: g.surface(),
+                clear: Some(Color::BLACK),
+            }),
+            depth: None,
+        });
+        assert!(matches!(
+            g.plan(SIZE),
+            Err(RenderError::GraphResourceNotProduced { .. })
+        ));
     }
 
     #[test]

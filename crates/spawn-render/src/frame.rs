@@ -5,7 +5,7 @@ use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
 use crate::graph::{CompiledGraph, PassKind};
 use crate::passes::forward_opaque::RenderScene;
-use crate::passes::{forward_lit, forward_opaque, overlay, shadow_depth};
+use crate::passes::{forward_lit, forward_opaque, forward_pbr, overlay, post, shadow_depth};
 use crate::renderer::Renderer;
 
 /// Holds the acquired surface texture, its view, and the command encoder for one
@@ -111,6 +111,12 @@ impl FrameContext<'_, '_> {
     pub fn execute(&mut self, graph: &CompiledGraph, scene: &RenderScene) -> RenderResult<()> {
         self.renderer
             .ensure_camera_capacity(graph.order().len() as u32);
+        // Size the shared per-draw model buffer once, up front, for both the lit
+        // (`draws`) and PBR (`pbr_draws`) lists so no pass reallocates mid-frame
+        // (which would invalidate already-recorded bind groups). The lists occupy
+        // disjoint slot ranges: `draws` in `[0, D)`, `pbr_draws` in `[D, D+P)`.
+        self.renderer
+            .ensure_model_capacity((scene.draws.len() + scene.pbr_draws.len()) as u32);
         let camera_stride = self.renderer.camera_stride();
         let scene_camera = scene.camera.uniform();
 
@@ -158,7 +164,7 @@ impl FrameContext<'_, '_> {
                         scene,
                     )?;
                 }
-                PassKind::ForwardOpaque | PassKind::ForwardLit => {
+                PassKind::ForwardOpaque | PassKind::ForwardLit | PassKind::ForwardPbr => {
                     self.renderer.write_camera_slot(slot as u32, &scene_camera);
                     let color = pass.color.ok_or(RenderError::InvalidArgument {
                         context: "forward pass needs a color target",
@@ -174,34 +180,83 @@ impl FrameContext<'_, '_> {
                             })?
                     };
                     let clear_depth = pass.depth.and_then(|d| d.clear);
-                    if pass.kind == PassKind::ForwardLit {
-                        let light_bind_group =
-                            graph
-                                .light_bind_group()
-                                .ok_or(RenderError::InvalidArgument {
-                                    context: "lit pass requires a compiled light bind group",
-                                })?;
-                        forward_lit::record(
-                            self.renderer,
-                            encoder,
-                            color_view,
-                            color.clear,
-                            clear_depth,
-                            camera_offset,
-                            light_bind_group,
-                            scene,
-                        )?;
-                    } else {
-                        forward_opaque::record(
-                            self.renderer,
-                            encoder,
-                            color_view,
-                            color.clear,
-                            clear_depth,
-                            camera_offset,
-                            scene,
-                        )?;
+                    match pass.kind {
+                        PassKind::ForwardLit => {
+                            let light_bind_group =
+                                graph
+                                    .light_bind_group()
+                                    .ok_or(RenderError::InvalidArgument {
+                                        context: "lit pass requires a compiled light bind group",
+                                    })?;
+                            forward_lit::record(
+                                self.renderer,
+                                encoder,
+                                color_view,
+                                color.clear,
+                                clear_depth,
+                                camera_offset,
+                                light_bind_group,
+                                scene,
+                            )?;
+                        }
+                        PassKind::ForwardPbr => {
+                            let light_bind_group =
+                                graph
+                                    .light_bind_group()
+                                    .ok_or(RenderError::InvalidArgument {
+                                        context: "PBR pass requires a compiled light bind group",
+                                    })?;
+                            forward_pbr::record(
+                                self.renderer,
+                                encoder,
+                                color_view,
+                                color.clear,
+                                clear_depth,
+                                camera_offset,
+                                light_bind_group,
+                                scene,
+                            )?;
+                        }
+                        _ => {
+                            forward_opaque::record(
+                                self.renderer,
+                                encoder,
+                                color_view,
+                                color.clear,
+                                clear_depth,
+                                camera_offset,
+                                scene,
+                            )?;
+                        }
                     }
+                }
+                PassKind::Tonemap => {
+                    let color = pass.color.ok_or(RenderError::InvalidArgument {
+                        context: "tonemap pass needs a color target",
+                    })?;
+                    let color_view: &wgpu::TextureView = if graph.is_surface(color.target) {
+                        &self.color_view
+                    } else {
+                        graph
+                            .transient_view(color.target)
+                            .ok_or(RenderError::InvalidArgument {
+                                context:
+                                    "color target is neither the surface nor a known transient",
+                            })?
+                    };
+                    let input_bind_group =
+                        graph
+                            .tonemap_bind_group()
+                            .ok_or(RenderError::InvalidArgument {
+                                context: "tonemap pass requires a compiled input bind group",
+                            })?;
+                    post::record_tonemap(
+                        self.renderer,
+                        encoder,
+                        color_view,
+                        color.clear,
+                        input_bind_group,
+                    )?;
                 }
                 PassKind::Overlay2D => {
                     // The overlay projects world-space lines with the scene

@@ -20,8 +20,13 @@ use crate::pipeline::{
     BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, RenderStateKey, ShaderStore,
     VertexLayoutId,
 };
-use crate::shaders::{LIT_WGSL, SHADOW_WGSL};
+use crate::shaders::{LIT_WGSL, PBR_WGSL, SHADOW_WGSL, TONEMAP_WGSL};
 use crate::texture::{SamplerConfig, Texture};
+
+/// The linear HDR format the `ForwardPbr`/scene passes render into before the
+/// tonemap reduces it to the LDR surface. Callers building a PBR graph size the
+/// scene-color transient with this format (see [`Renderer::hdr_format`]).
+const HDR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
 /// The `raw-window-handle` bound a surface source must satisfy. `Send + Sync` is
 /// required by wgpu's surface target. spawn-platform's `Window` implements it.
@@ -74,10 +79,15 @@ pub struct Renderer<'w> {
     pub(crate) model_capacity: u32,
     light_buffer: wgpu::Buffer,
     shadow_sampler: wgpu::Sampler,
+    fullscreen_sampler: wgpu::Sampler,
     lit_pipeline_key: PipelineKey,
     shadow_pipeline_key: PipelineKey,
+    pbr_pipeline_key: PipelineKey,
+    tonemap_pipeline_key: PipelineKey,
     pub(crate) overlay: OverlayState,
     pub(crate) fallback_texture: Texture,
+    pub(crate) fallback_normal: Texture,
+    pub(crate) fallback_black: Texture,
     pub(crate) depth_view: wgpu::TextureView,
     depth_texture: wgpu::Texture,
     pub(crate) surface: wgpu::Surface<'w>,
@@ -312,6 +322,44 @@ impl<'w> Renderer<'w> {
         cache.get_or_create(&device, &layouts, lit_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, shadow_pipeline_key, &shaders)?;
 
+        // The PBR forward pass renders into the HDR scene transient; the tonemap
+        // fullscreen pass reduces that to the LDR surface. Both shaders are
+        // built-ins compiled and built once here, never per frame.
+        let pbr_shader = ShaderHandle::from_id(AssetId::from_raw(BUILTIN_PBR_SHADER_ID));
+        let tonemap_shader = ShaderHandle::from_id(AssetId::from_raw(BUILTIN_TONEMAP_SHADER_ID));
+        shaders.load(&device, pbr_shader, PBR_WGSL)?;
+        shaders.load(&device, tonemap_shader, TONEMAP_WGSL)?;
+        let pbr_pipeline_key = PipelineKey {
+            shader: pbr_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: HDR_FORMAT,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ForwardPbr,
+        };
+        let tonemap_pipeline_key = PipelineKey {
+            shader: tonemap_shader,
+            // The fullscreen triangle is generated from the vertex index; the
+            // layout field is part of the key but no vertex buffer is bound.
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Always,
+                depth_write: false,
+                cull: CullMode::None,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::Tonemap,
+        };
+        cache.get_or_create(&device, &layouts, pbr_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, tonemap_pipeline_key, &shaders)?;
+
         let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spawn-light-uniform"),
             size: std::mem::size_of::<LightUniform>() as u64,
@@ -330,12 +378,43 @@ impl<'w> Renderer<'w> {
             ..Default::default()
         });
 
+        let fullscreen_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("spawn-fullscreen-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         let fallback_texture = Texture::build(
             &device,
             &queue,
             &[255, 255, 255, 255],
             SurfaceSize::new(1, 1),
             true,
+            SamplerConfig::default(),
+        )?;
+        // Typed PBR fallbacks for absent metallic-roughness maps: a flat
+        // tangent-space normal (+Z) and opaque black emissive, both linear (data,
+        // not color). Sampling is gated by the material's texture flags, so these
+        // satisfy the shared layout without affecting shading.
+        let fallback_normal = Texture::build(
+            &device,
+            &queue,
+            &[128, 128, 255, 255],
+            SurfaceSize::new(1, 1),
+            false,
+            SamplerConfig::default(),
+        )?;
+        let fallback_black = Texture::build(
+            &device,
+            &queue,
+            &[0, 0, 0, 255],
+            SurfaceSize::new(1, 1),
+            false,
             SamplerConfig::default(),
         )?;
 
@@ -367,10 +446,15 @@ impl<'w> Renderer<'w> {
             model_capacity,
             light_buffer,
             shadow_sampler,
+            fullscreen_sampler,
             lit_pipeline_key,
             shadow_pipeline_key,
+            pbr_pipeline_key,
+            tonemap_pipeline_key,
             overlay,
             fallback_texture,
+            fallback_normal,
+            fallback_black,
             depth_view,
             depth_texture,
             surface,
@@ -451,6 +535,21 @@ impl<'w> Renderer<'w> {
 
     pub(crate) fn fallback_texture(&self) -> &Texture {
         &self.fallback_texture
+    }
+
+    pub(crate) fn fallback_normal_texture(&self) -> &Texture {
+        &self.fallback_normal
+    }
+
+    pub(crate) fn fallback_black_texture(&self) -> &Texture {
+        &self.fallback_black
+    }
+
+    /// The linear HDR format the PBR/scene passes render into. Callers building a
+    /// PBR graph size the scene-color transient with this format; the tonemap pass
+    /// resolves it to the LDR surface.
+    pub fn hdr_format(&self) -> TextureFormat {
+        HDR_FORMAT
     }
 
     /// Reads the device-lost flag set by the wgpu device-lost callback. `true`
@@ -611,6 +710,40 @@ impl<'w> Renderer<'w> {
         self.shadow_pipeline_key
     }
 
+    /// The cache key of the built-in PBR pipeline (the `ForwardPbr` pass uses it
+    /// for every draw; PBR materials supply group 1).
+    pub(crate) fn pbr_pipeline_key(&self) -> PipelineKey {
+        self.pbr_pipeline_key
+    }
+
+    /// The cache key of the built-in fullscreen tonemap pipeline.
+    pub(crate) fn tonemap_pipeline_key(&self) -> PipelineKey {
+        self.tonemap_pipeline_key
+    }
+
+    /// Builds a fullscreen-pass group-0 bind group sampling `input_view` (a scene
+    /// transient) with the renderer's clamp/linear sampler. Built at graph
+    /// compile/resize, never per frame.
+    pub(crate) fn create_fullscreen_bind_group(
+        &self,
+        input_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spawn-fullscreen-bg"),
+            layout: &self.layouts.fullscreen,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(input_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.fullscreen_sampler),
+                },
+            ],
+        })
+    }
+
     /// Builds an overlay UI texture bind group (group 0 of the UI pipeline) for
     /// `texture`. Used by [`FontRegistry`](crate::passes::overlay::FontRegistry)
     /// to bind a font atlas; built at registration, never per frame.
@@ -652,10 +785,14 @@ impl Renderer<'static> {
 const INITIAL_MODEL_CAPACITY: u32 = 256;
 const INITIAL_CAMERA_CAPACITY: u32 = 8;
 
-// Reserved `AssetId` raw values for the engine's built-in lit and shadow shaders.
-// Picked at the top of the id space so an app's content ids do not collide.
+// Reserved `AssetId` raw values for the engine's built-in shaders. Picked at the
+// top of the id space so an app's content ids do not collide. `MAX-2`/`MAX-3` are
+// the overlay UI/line shaders (see `passes::overlay`), so the PBR and tonemap
+// shaders take `MAX-4`/`MAX-5` to avoid aliasing in the shared `ShaderStore`.
 const BUILTIN_LIT_SHADER_ID: u64 = u64::MAX;
 const BUILTIN_SHADOW_SHADER_ID: u64 = u64::MAX - 1;
+const BUILTIN_PBR_SHADER_ID: u64 = u64::MAX - 4;
+const BUILTIN_TONEMAP_SHADER_ID: u64 = u64::MAX - 5;
 
 fn align_up(value: u64, align: u64) -> u64 {
     if align <= 1 {

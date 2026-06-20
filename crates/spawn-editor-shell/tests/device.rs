@@ -218,6 +218,7 @@ fn editor_frame_composes_and_renders() {
         camera: &camera,
         lighting: Some(&lighting),
         draws: &draws,
+        pbr_draws: &[],
         overlay: Some(Overlay {
             tree: &ui,
             draw_list: &draw_list,

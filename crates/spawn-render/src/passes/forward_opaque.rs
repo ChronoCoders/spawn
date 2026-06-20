@@ -8,19 +8,21 @@ use spawn_core::{Color, Mat4};
 use crate::camera::Camera;
 use crate::error::RenderResult;
 use crate::light::Lighting;
-use crate::material::Material;
+use crate::material::{Material, PbrMaterial};
 use crate::mesh::Mesh;
 use crate::passes::overlay::Overlay;
 use crate::pipeline::ModelUniform;
 use crate::renderer::Renderer;
 
 /// The scene to render: one active camera, optional lighting (required by the
-/// shadow and lit passes), the caller-ordered draws, and optional overlay data
-/// (the `spawn_ui` draw list + editor lines, consumed by the `Overlay2D` pass).
+/// shadow, lit, and PBR passes), the caller-ordered unlit/lit draws, the PBR
+/// draws (consumed by the `ForwardPbr` pass), and optional overlay data (the
+/// `spawn_ui` draw list + editor lines, consumed by the `Overlay2D` pass).
 pub struct RenderScene<'a> {
     pub camera: &'a Camera,
     pub lighting: Option<&'a Lighting>,
     pub draws: &'a [DrawItem<'a>],
+    pub pbr_draws: &'a [PbrDrawItem<'a>],
     pub overlay: Option<Overlay<'a>>,
 }
 
@@ -28,6 +30,14 @@ pub struct RenderScene<'a> {
 pub struct DrawItem<'a> {
     pub mesh: &'a Mesh,
     pub material: &'a Material,
+    pub model: Mat4,
+}
+
+/// A single physically based draw: mesh + PBR material + model-to-world
+/// transform, shaded by the `ForwardPbr` pass and cast into the shadow map.
+pub struct PbrDrawItem<'a> {
+    pub mesh: &'a Mesh,
+    pub material: &'a PbrMaterial,
     pub model: Mat4,
 }
 

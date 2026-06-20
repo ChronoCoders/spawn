@@ -14,7 +14,7 @@ use crate::error::{RenderError, RenderResult};
 use crate::format::{CompareFn, CullMode, DepthFormat, TextureFormat, Topology};
 use crate::graph::PassKind;
 use crate::light::LightUniform;
-use crate::material::MaterialUniform;
+use crate::material::{MaterialUniform, PbrMaterialUniform};
 use crate::mesh::{LineVertex, UiVertex, Vertex};
 
 /// The vertex layout a pipeline consumes. Part of the cache key so pipelines with
@@ -146,6 +146,14 @@ pub struct BindGroupLayouts {
     pub camera: wgpu::BindGroupLayout,
     pub material: wgpu::BindGroupLayout,
     pub light: wgpu::BindGroupLayout,
+    /// Group 1 of the `ForwardPbr` pass: the [`PbrMaterialUniform`] at binding 0
+    /// plus the five metallic-roughness `(texture, sampler)` pairs (base-color,
+    /// metallic-roughness, normal, emissive, occlusion) at bindings 1–10. Absent
+    /// maps bind the renderer's typed fallbacks so the layout is always satisfied.
+    pub pbr_material: wgpu::BindGroupLayout,
+    /// Group 0 of a fullscreen post pass (tonemap): a float input texture at
+    /// binding 0 and a filtering sampler at binding 1.
+    pub fullscreen: wgpu::BindGroupLayout,
     /// Overlay UI texture group (group 0 of the UI pipeline): a float texture at
     /// binding 0 and a filtering sampler at binding 1. Bound to the 1×1 white
     /// texture for solid rects/borders, or a font atlas for text.
@@ -250,6 +258,64 @@ impl BindGroupLayouts {
                 },
             ],
         });
+        let pbr_material = {
+            let mut entries = vec![wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<PbrMaterialUniform>() as u64,
+                    ),
+                },
+                count: None,
+            }];
+            for slot in 0..5u32 {
+                let base = 1 + slot * 2;
+                entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: base,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                });
+                entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: base + 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                });
+            }
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("spawn-pbr-material-bgl"),
+                entries: &entries,
+            })
+        };
+        let fullscreen = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("spawn-fullscreen-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
         let overlay_texture = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spawn-overlay-texture-bgl"),
             entries: &[
@@ -275,6 +341,8 @@ impl BindGroupLayouts {
             camera,
             material,
             light,
+            pbr_material,
+            fullscreen,
             overlay_texture,
         }
     }
@@ -335,6 +403,8 @@ impl PipelineCache {
             let bind_group_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
                 PassKind::ForwardOpaque => &[&layouts.camera, &layouts.material],
                 PassKind::ForwardLit => &[&layouts.camera, &layouts.material, &layouts.light],
+                PassKind::ForwardPbr => &[&layouts.camera, &layouts.pbr_material, &layouts.light],
+                PassKind::Tonemap => &[&layouts.fullscreen],
                 PassKind::ShadowDepth => &[&layouts.camera],
                 PassKind::Overlay2D => match key.vertex_layout {
                     VertexLayoutId::UiQuad => &[&layouts.overlay_texture],
@@ -352,10 +422,11 @@ impl PipelineCache {
                 push_constant_ranges: &[],
             });
 
-            // The overlay composites on top of the lit frame: no depth, alpha
-            // blended. The 3D passes are opaque with depth.
+            // The overlay composites on top of the lit frame and the tonemap is a
+            // fullscreen resolve: both run without depth. The 3D passes are opaque
+            // with depth.
             let depth_stencil = match key.pass {
-                PassKind::Overlay2D => None,
+                PassKind::Overlay2D | PassKind::Tonemap => None,
                 _ => Some(wgpu::DepthStencilState {
                     format: key.render_state.depth_format.to_wgpu(),
                     depth_write_enabled: key.render_state.depth_write,
@@ -378,21 +449,29 @@ impl PipelineCache {
             // attachment.
             let fragment = match key.pass {
                 PassKind::ShadowDepth => None,
-                PassKind::ForwardOpaque | PassKind::ForwardLit | PassKind::Overlay2D => {
-                    Some(wgpu::FragmentState {
-                        module,
-                        entry_point: "fs_main",
-                        targets: &color_targets,
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    })
-                }
+                PassKind::ForwardOpaque
+                | PassKind::ForwardLit
+                | PassKind::ForwardPbr
+                | PassKind::Tonemap
+                | PassKind::Overlay2D => Some(wgpu::FragmentState {
+                    module,
+                    entry_point: "fs_main",
+                    targets: &color_targets,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
             };
 
-            let vertex_buffers = [match key.vertex_layout {
+            // Fullscreen passes generate their triangle from the vertex index and
+            // bind no vertex buffer; every other pass consumes one vertex layout.
+            let mesh_buffer = [match key.vertex_layout {
                 VertexLayoutId::PositionNormalUv => Vertex::layout(),
                 VertexLayoutId::UiQuad => UiVertex::layout(),
                 VertexLayoutId::OverlayLine => LineVertex::layout(),
             }];
+            let vertex_buffers: &[wgpu::VertexBufferLayout] = match key.pass {
+                PassKind::Tonemap => &[],
+                _ => &mesh_buffer,
+            };
 
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("spawn-pipeline"),
@@ -400,7 +479,7 @@ impl PipelineCache {
                 vertex: wgpu::VertexState {
                     module,
                     entry_point: "vs_main",
-                    buffers: &vertex_buffers,
+                    buffers: vertex_buffers,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment,
