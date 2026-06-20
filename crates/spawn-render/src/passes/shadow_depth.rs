@@ -4,7 +4,7 @@
 //! slot, plus the per-draw model). The lit pass samples the resulting depth.
 
 use crate::error::RenderResult;
-use crate::passes::forward_opaque::{model_uniform, RenderScene};
+use crate::passes::forward_opaque::{model_uniform, opaque_instance_total, RenderScene};
 use crate::renderer::Renderer;
 
 /// Records the depth-only shadow pass into `encoder` against `depth_view` (the
@@ -34,6 +34,8 @@ pub(crate) fn record(
     };
 
     let camera_bind_group = &renderer.camera_bind_group;
+    let instance_bind_group = renderer.instance_bind_group();
+    let instanced_key = renderer.instanced_shadow_pipeline_key();
     let cache = &renderer.cache;
     let model_stride = renderer.model_stride();
     let pipeline = cache.get(&renderer.shadow_pipeline_key())?;
@@ -73,6 +75,48 @@ pub(crate) fn record(
             wgpu::IndexFormat::Uint32,
         );
         pass.draw_indexed(0..draw.mesh.index_count(), 0, 0..1);
+    }
+
+    // Instanced casters (opaque then PBR batches), matching the shared storage
+    // buffer's upload order so each batch's instance range is correct: opaque in
+    // `[0, total_opaque)`, PBR after. The instanced shadow pipeline reads the model
+    // from group 1.
+    if !scene.instances.is_empty() || !scene.pbr_instances.is_empty() {
+        let instanced_pipeline = cache.get(&instanced_key)?;
+        pass.set_pipeline(instanced_pipeline);
+        pass.set_bind_group(1, instance_bind_group, &[]);
+        let mut instance_base = 0u32;
+        for batch in scene.instances {
+            let count = batch.instances.len() as u32;
+            pass.set_bind_group(0, camera_bind_group, &[camera_offset, 0]);
+            pass.set_vertex_buffer(0, batch.mesh.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                batch.mesh.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(
+                0..batch.mesh.index_count(),
+                0,
+                instance_base..instance_base + count,
+            );
+            instance_base += count;
+        }
+        instance_base = opaque_instance_total(scene);
+        for batch in scene.pbr_instances {
+            let count = batch.instances.len() as u32;
+            pass.set_bind_group(0, camera_bind_group, &[camera_offset, 0]);
+            pass.set_vertex_buffer(0, batch.mesh.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                batch.mesh.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(
+                0..batch.mesh.index_count(),
+                0,
+                instance_base..instance_base + count,
+            );
+            instance_base += count;
+        }
     }
 
     Ok(())

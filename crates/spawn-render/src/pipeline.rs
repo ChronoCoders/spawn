@@ -16,6 +16,7 @@ use crate::graph::PassKind;
 use crate::light::LightUniform;
 use crate::material::{MaterialUniform, PbrMaterialUniform};
 use crate::mesh::{LineVertex, UiVertex, Vertex};
+use crate::passes::forward_opaque::InstanceData;
 
 /// The vertex layout a pipeline consumes. Part of the cache key so pipelines with
 /// different vertex inputs are distinct entries.
@@ -52,6 +53,11 @@ pub struct PipelineKey {
     pub vertex_layout: VertexLayoutId,
     pub render_state: RenderStateKey,
     pub pass: PassKind,
+    /// When set, the pipeline reads per-instance data from a storage buffer at
+    /// `@builtin(instance_index)`; its layout gains the instance storage group
+    /// (appended after the pass's groups). The non-instanced and instanced
+    /// pipelines for one shader/state/pass are distinct cache entries.
+    pub instanced: bool,
 }
 
 /// Compiled WGSL modules keyed by [`ShaderHandle`]. Modules live here for the
@@ -154,6 +160,11 @@ pub struct BindGroupLayouts {
     /// Group 0 of a fullscreen post pass (tonemap): a float input texture at
     /// binding 0 and a filtering sampler at binding 1.
     pub fullscreen: wgpu::BindGroupLayout,
+    /// Per-instance storage group appended to an instanced pipeline's layout: a
+    /// single read-only `array<InstanceData>` at binding 0, indexed in the vertex
+    /// shader by `@builtin(instance_index)` (the model is read in the vertex stage,
+    /// the tint in the fragment stage).
+    pub instance: wgpu::BindGroupLayout,
     /// Overlay UI texture group (group 0 of the UI pipeline): a float texture at
     /// binding 0 and a filtering sampler at binding 1. Bound to the 1×1 white
     /// texture for solid rects/borders, or a font atlas for text.
@@ -316,6 +327,21 @@ impl BindGroupLayouts {
                 },
             ],
         });
+        let instance = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("spawn-instance-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<InstanceData>() as u64
+                    ),
+                },
+                count: None,
+            }],
+        });
         let overlay_texture = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spawn-overlay-texture-bgl"),
             entries: &[
@@ -343,6 +369,7 @@ impl BindGroupLayouts {
             light,
             pbr_material,
             fullscreen,
+            instance,
             overlay_texture,
         }
     }
@@ -400,7 +427,7 @@ impl PipelineCache {
             // texture group (group 0) while its line pipeline reuses the camera
             // group. wgpu inserts all barriers — the layout here only declares the
             // resource interface.
-            let bind_group_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
+            let base_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
                 PassKind::ForwardOpaque => &[&layouts.camera, &layouts.material],
                 PassKind::ForwardLit | PassKind::Transparent => {
                     &[&layouts.camera, &layouts.material, &layouts.light]
@@ -418,6 +445,14 @@ impl PipelineCache {
                     }
                 },
             };
+            // An instanced pipeline appends the per-instance storage group after the
+            // pass's groups, so its index is the highest in the layout (group 2 for
+            // opaque, 3 for PBR, 1 for shadow).
+            let mut bind_group_layouts = base_layouts.to_vec();
+            if key.instanced {
+                bind_group_layouts.push(&layouts.instance);
+            }
+            let bind_group_layouts = bind_group_layouts.as_slice();
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("spawn-pipeline-layout"),
                 bind_group_layouts,
@@ -562,6 +597,7 @@ mod tests {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::ForwardOpaque,
+            instanced: false,
         }
     }
 
@@ -679,6 +715,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::ForwardOpaque,
+            instanced: false,
         };
         let mut cache = PipelineCache::new();
         assert!(cache.get_or_create(&device, &layouts, k, &store).is_ok());

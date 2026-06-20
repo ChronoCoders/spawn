@@ -121,6 +121,33 @@ impl FrameContext<'_, '_> {
         self.renderer.ensure_model_capacity(
             (scene.draws.len() + scene.pbr_draws.len() + scene.transparent.len()) as u32,
         );
+        // Upload all instance data once, up front, into the shared storage buffer:
+        // opaque batches first (`[0, total_opaque)`), then PBR batches. The opaque,
+        // PBR, and shadow record paths recompute the same base offsets, so the
+        // per-batch `draw_indexed(.., base..base+N)` ranges stay consistent.
+        let opaque_instances: u32 = scene
+            .instances
+            .iter()
+            .map(|b| b.instances.len() as u32)
+            .sum();
+        let pbr_instances: u32 = scene
+            .pbr_instances
+            .iter()
+            .map(|b| b.instances.len() as u32)
+            .sum();
+        self.renderer
+            .ensure_instance_capacity(opaque_instances + pbr_instances);
+        {
+            let mut base = 0u32;
+            for batch in scene.instances {
+                self.renderer.write_instances(base, batch.instances);
+                base += batch.instances.len() as u32;
+            }
+            for batch in scene.pbr_instances {
+                self.renderer.write_instances(base, batch.instances);
+                base += batch.instances.len() as u32;
+            }
+        }
         let camera_stride = self.renderer.camera_stride();
         let scene_camera = scene.camera.uniform();
 

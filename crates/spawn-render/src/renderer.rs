@@ -15,12 +15,16 @@ use crate::format::{
 };
 use crate::graph::PassKind;
 use crate::light::LightUniform;
+use crate::passes::forward_opaque::InstanceData;
 use crate::passes::overlay::{make_texture_bind_group, OverlayState};
 use crate::pipeline::{
     BindGroupLayouts, ModelUniform, PipelineCache, PipelineKey, RenderStateKey, ShaderStore,
     VertexLayoutId,
 };
-use crate::shaders::{LIT_WGSL, PBR_WGSL, SHADOW_WGSL, TONEMAP_WGSL};
+use crate::shaders::{
+    INSTANCED_OPAQUE_WGSL, INSTANCED_PBR_WGSL, INSTANCED_SHADOW_WGSL, LIT_WGSL, PBR_WGSL,
+    SHADOW_WGSL, TONEMAP_WGSL,
+};
 use crate::texture::{SamplerConfig, Texture};
 
 /// The linear HDR format the `ForwardPbr`/scene passes render into before the
@@ -86,6 +90,12 @@ pub struct Renderer<'w> {
     tonemap_pipeline_key: PipelineKey,
     transparent_pipeline_key: PipelineKey,
     pub(crate) transparent_scratch: Vec<(f32, u32)>,
+    instance_buffer: wgpu::Buffer,
+    instance_bind_group: wgpu::BindGroup,
+    instance_capacity: u32,
+    instanced_opaque_pipeline_key: PipelineKey,
+    instanced_pbr_pipeline_key: PipelineKey,
+    instanced_shadow_pipeline_key: PipelineKey,
     pub(crate) overlay: OverlayState,
     pub(crate) fallback_texture: Texture,
     pub(crate) fallback_normal: Texture,
@@ -305,6 +315,7 @@ impl<'w> Renderer<'w> {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::ForwardLit,
+            instanced: false,
         };
         let shadow_pipeline_key = PipelineKey {
             shader: shadow_shader,
@@ -320,6 +331,7 @@ impl<'w> Renderer<'w> {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::ShadowDepth,
+            instanced: false,
         };
         cache.get_or_create(&device, &layouts, lit_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, shadow_pipeline_key, &shaders)?;
@@ -343,6 +355,7 @@ impl<'w> Renderer<'w> {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::ForwardPbr,
+            instanced: false,
         };
         let tonemap_pipeline_key = PipelineKey {
             shader: tonemap_shader,
@@ -358,6 +371,7 @@ impl<'w> Renderer<'w> {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::Tonemap,
+            instanced: false,
         };
         // The transparent pass reuses the lit shader (Lambert + ambient + PCF
         // shadow) but blends into the HDR scene with depth-write off, so it is a
@@ -374,10 +388,81 @@ impl<'w> Renderer<'w> {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::Transparent,
+            instanced: false,
         };
         cache.get_or_create(&device, &layouts, pbr_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, tonemap_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, transparent_pipeline_key, &shaders)?;
+
+        // Instanced built-ins: the opaque (unlit) and PBR forward variants plus the
+        // depth-only shadow caster, all reading the per-instance model + tint from
+        // the storage buffer at `@builtin(instance_index)`. Opaque instancing writes
+        // the LDR surface; PBR instancing writes the HDR scene (matching their
+        // non-instanced counterparts). Compiled and built once here.
+        let instanced_opaque_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_INSTANCED_OPAQUE_SHADER_ID));
+        let instanced_shadow_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_INSTANCED_SHADOW_SHADER_ID));
+        let instanced_pbr_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_INSTANCED_PBR_SHADER_ID));
+        shaders.load(&device, instanced_opaque_shader, INSTANCED_OPAQUE_WGSL)?;
+        shaders.load(&device, instanced_shadow_shader, INSTANCED_SHADOW_WGSL)?;
+        shaders.load(&device, instanced_pbr_shader, INSTANCED_PBR_WGSL)?;
+        let instanced_opaque_pipeline_key = PipelineKey {
+            shader: instanced_opaque_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ForwardOpaque,
+            instanced: true,
+        };
+        let instanced_pbr_pipeline_key = PipelineKey {
+            shader: instanced_pbr_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: HDR_FORMAT,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ForwardPbr,
+            instanced: true,
+        };
+        let instanced_shadow_pipeline_key = PipelineKey {
+            shader: instanced_shadow_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::None,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ShadowDepth,
+            instanced: true,
+        };
+        cache.get_or_create(&device, &layouts, instanced_opaque_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, instanced_pbr_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, instanced_shadow_pipeline_key, &shaders)?;
+
+        let instance_capacity = INITIAL_INSTANCE_CAPACITY;
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-instance-storage"),
+            size: std::mem::size_of::<InstanceData>() as u64 * instance_capacity as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let instance_bind_group =
+            make_instance_bind_group(&device, &layouts.instance, &instance_buffer);
 
         let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spawn-light-uniform"),
@@ -472,6 +557,12 @@ impl<'w> Renderer<'w> {
             tonemap_pipeline_key,
             transparent_pipeline_key,
             transparent_scratch: Vec::new(),
+            instance_buffer,
+            instance_bind_group,
+            instance_capacity,
+            instanced_opaque_pipeline_key,
+            instanced_pbr_pipeline_key,
+            instanced_shadow_pipeline_key,
             overlay,
             fallback_texture,
             fallback_normal,
@@ -748,6 +839,59 @@ impl<'w> Renderer<'w> {
         self.transparent_pipeline_key
     }
 
+    /// Cache keys of the built-in instanced pipelines (opaque, PBR, depth-only
+    /// shadow), each reading per-instance data from the storage buffer.
+    pub(crate) fn instanced_opaque_pipeline_key(&self) -> PipelineKey {
+        self.instanced_opaque_pipeline_key
+    }
+
+    pub(crate) fn instanced_pbr_pipeline_key(&self) -> PipelineKey {
+        self.instanced_pbr_pipeline_key
+    }
+
+    pub(crate) fn instanced_shadow_pipeline_key(&self) -> PipelineKey {
+        self.instanced_shadow_pipeline_key
+    }
+
+    /// The instance storage bind group (group index varies by pass: 2 opaque, 3
+    /// PBR, 1 shadow). Rebuilt only when the storage buffer grows, never per frame.
+    pub(crate) fn instance_bind_group(&self) -> &wgpu::BindGroup {
+        &self.instance_bind_group
+    }
+
+    /// Ensures the instance storage buffer holds at least `count` entries,
+    /// reallocating (and rebuilding the instance bind group) only on growth — never
+    /// in steady state once capacity covers the largest frame's instance count.
+    pub(crate) fn ensure_instance_capacity(&mut self, count: u32) {
+        if count <= self.instance_capacity {
+            return;
+        }
+        let new_capacity = count.next_power_of_two().max(INITIAL_INSTANCE_CAPACITY);
+        self.instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-instance-storage"),
+            size: std::mem::size_of::<InstanceData>() as u64 * new_capacity as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.instance_capacity = new_capacity;
+        self.instance_bind_group =
+            make_instance_bind_group(&self.device, &self.layouts.instance, &self.instance_buffer);
+    }
+
+    /// Writes `data` into the instance storage buffer starting at instance index
+    /// `base` (byte offset `base * size_of::<InstanceData>()`) in place; no
+    /// reallocation. Caller guarantees capacity via [`Renderer::ensure_instance_capacity`].
+    pub(crate) fn write_instances(&self, base: u32, data: &[InstanceData]) {
+        if data.is_empty() {
+            return;
+        }
+        self.queue.write_buffer(
+            &self.instance_buffer,
+            u64::from(base) * std::mem::size_of::<InstanceData>() as u64,
+            bytemuck::cast_slice(data),
+        );
+    }
+
     /// Builds a fullscreen-pass group-0 bind group sampling `input_view` (a scene
     /// transient) with the renderer's clamp/linear sampler. Built at graph
     /// compile/resize, never per frame.
@@ -811,6 +955,7 @@ impl Renderer<'static> {
 
 const INITIAL_MODEL_CAPACITY: u32 = 256;
 const INITIAL_CAMERA_CAPACITY: u32 = 8;
+const INITIAL_INSTANCE_CAPACITY: u32 = 256;
 
 // Reserved `AssetId` raw values for the engine's built-in shaders. Picked at the
 // top of the id space so an app's content ids do not collide. `MAX-2`/`MAX-3` are
@@ -820,12 +965,30 @@ const BUILTIN_LIT_SHADER_ID: u64 = u64::MAX;
 const BUILTIN_SHADOW_SHADER_ID: u64 = u64::MAX - 1;
 const BUILTIN_PBR_SHADER_ID: u64 = u64::MAX - 4;
 const BUILTIN_TONEMAP_SHADER_ID: u64 = u64::MAX - 5;
+const BUILTIN_INSTANCED_OPAQUE_SHADER_ID: u64 = u64::MAX - 6;
+const BUILTIN_INSTANCED_SHADOW_SHADER_ID: u64 = u64::MAX - 7;
+const BUILTIN_INSTANCED_PBR_SHADER_ID: u64 = u64::MAX - 8;
 
 fn align_up(value: u64, align: u64) -> u64 {
     if align <= 1 {
         return value;
     }
     value.div_ceil(align) * align
+}
+
+fn make_instance_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    instance_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("spawn-instance-bg"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: instance_buffer.as_entire_binding(),
+        }],
+    })
 }
 
 fn make_camera_bind_group(

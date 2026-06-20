@@ -46,7 +46,9 @@ pub use material::{
     pbr_texture_flags, Material, MaterialUniform, PbrMaps, PbrMaterial, PbrMaterialUniform,
 };
 pub use mesh::{Mesh, Vertex};
-pub use passes::forward_opaque::{DrawItem, PbrDrawItem, RenderScene};
+pub use passes::forward_opaque::{
+    DrawItem, InstanceBatch, InstanceData, PbrDrawItem, PbrInstanceBatch, RenderScene,
+};
 pub use passes::overlay::{FontRegistry, LineSegment, Overlay};
 pub use pipeline::{
     BindGroupLayouts, PipelineCache, PipelineKey, RenderStateKey, ShaderStore, VertexLayoutId,

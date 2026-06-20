@@ -158,6 +158,7 @@ impl OverlayState {
                 topology: Topology::TriangleList,
             },
             pass: PassKind::Overlay2D,
+            instanced: false,
         };
         let line_key = PipelineKey {
             shader: line_shader,
@@ -171,6 +172,7 @@ impl OverlayState {
                 topology: Topology::LineList,
             },
             pass: PassKind::Overlay2D,
+            instanced: false,
         };
         cache.get_or_create(device, layouts, ui_key, shaders)?;
         cache.get_or_create(device, layouts, line_key, shaders)?;

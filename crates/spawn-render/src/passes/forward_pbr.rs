@@ -11,7 +11,7 @@
 use spawn_core::Color;
 
 use crate::error::RenderResult;
-use crate::passes::forward_opaque::{model_uniform, RenderScene};
+use crate::passes::forward_opaque::{model_uniform, opaque_instance_total, RenderScene};
 use crate::renderer::Renderer;
 
 /// Records the PBR pass into `encoder` against `color_view` (the HDR scene
@@ -53,6 +53,8 @@ pub(crate) fn record(
 
     let depth_view = &renderer.depth_view;
     let camera_bind_group = &renderer.camera_bind_group;
+    let instance_bind_group = renderer.instance_bind_group();
+    let instanced_key = renderer.instanced_pbr_pipeline_key();
     let cache = &renderer.cache;
     let model_stride = renderer.model_stride();
     let pipeline = cache.get(&renderer.pbr_pipeline_key())?;
@@ -91,6 +93,29 @@ pub(crate) fn record(
             wgpu::IndexFormat::Uint32,
         );
         pass.draw_indexed(0..draw.mesh.index_count(), 0, 0..1);
+    }
+
+    // Instanced PBR batches: one `draw_indexed(.., base..base+N)` per batch over the
+    // instance storage (group 3). PBR instances follow the opaque instances in the
+    // shared buffer, so the base starts at the opaque total.
+    if !scene.pbr_instances.is_empty() {
+        let instanced_pipeline = cache.get(&instanced_key)?;
+        pass.set_pipeline(instanced_pipeline);
+        pass.set_bind_group(2, light_bind_group, &[]);
+        pass.set_bind_group(3, instance_bind_group, &[]);
+        let mut base = opaque_instance_total(scene);
+        for batch in scene.pbr_instances {
+            let count = batch.instances.len() as u32;
+            pass.set_bind_group(0, camera_bind_group, &[camera_offset, 0]);
+            pass.set_bind_group(1, batch.material.bind_group(), &[]);
+            pass.set_vertex_buffer(0, batch.mesh.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                batch.mesh.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..batch.mesh.index_count(), 0, base..base + count);
+            base += count;
+        }
     }
 
     Ok(())

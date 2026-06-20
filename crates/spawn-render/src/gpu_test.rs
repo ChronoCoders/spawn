@@ -122,6 +122,7 @@ fn occluder_casts_shadow_on_ground() {
             topology: Topology::TriangleList,
         },
         pass: PassKind::ForwardLit,
+        instanced: false,
     };
     let shadow_key = PipelineKey {
         shader: shadow_shader,
@@ -135,6 +136,7 @@ fn occluder_casts_shadow_on_ground() {
             topology: Topology::TriangleList,
         },
         pass: PassKind::ShadowDepth,
+        instanced: false,
     };
     cache
         .get_or_create(&device, &layouts, lit_key, &shaders)
