@@ -50,7 +50,6 @@ fn positions(world: &World) -> Vec<NetPos> {
 
 #[test]
 fn two_clients_converge_with_interest_filtering() {
-    // Transport: a loopback server and two clients.
     let saddr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let mut server_net = Server::bind(saddr, ServerConfig::default()).unwrap();
     let server_addr = server_net.local_addr().unwrap();
@@ -59,7 +58,6 @@ fn two_clients_converge_with_interest_filtering() {
     c1_net.connect(server_addr).unwrap();
     c2_net.connect(server_addr).unwrap();
 
-    // Server world + driver.
     let mut sworld = World::new();
     let mut repl = Replicator::new(ReplicationConfig {
         default_view_radius: 32.0,
@@ -67,7 +65,6 @@ fn two_clients_converge_with_interest_filtering() {
     });
     repl.registry_mut().register::<NetPos>(&mut sworld);
 
-    // Three world entities clustered near the origin (x = 1, 2, 3).
     for i in 1..=3u32 {
         sworld.spawn_with((
             at(i as f32, 0.0),
@@ -79,7 +76,6 @@ fn two_clients_converge_with_interest_filtering() {
         ));
     }
 
-    // Two client worlds + drivers.
     let mut w1 = World::new();
     let mut cl1 = ReplicationClient::new(ReplicationConfig::default());
     cl1.registry_mut().register::<NetPos>(&mut w1);
@@ -97,9 +93,9 @@ fn two_clients_converge_with_interest_filtering() {
         // viewer. Client 1 looks at the origin; client 2 looks far away.
         for client in events.connected {
             let (vx, vz, owner_x) = if client.0 % 2 == 1 {
-                (0.0f32, 0.0f32, 50.0f32) // client 1: viewer at origin
+                (0.0f32, 0.0f32, 50.0f32)
             } else {
-                (1000.0, 1000.0, 1050.0) // client 2: viewer far from the cluster
+                (1000.0, 1000.0, 1050.0)
             };
             let pawn = sworld.spawn_with((
                 at(vx, vz),

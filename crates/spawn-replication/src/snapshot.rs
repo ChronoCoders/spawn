@@ -257,7 +257,6 @@ pub fn encode_snapshot(
     }
     bw.write_bits(u64::from(last_input_seq), 16)?;
 
-    // Despawns (small, all included).
     for &id in despawns {
         bw.write_bool(true)?;
         bw.write_bits(u64::from(id.0), 32)?;
@@ -284,7 +283,6 @@ pub fn encode_snapshot(
     }
     bw.write_bool(false)?;
 
-    // Updates (delta, budget-limited by the running byte count).
     let mut updates_written = 0usize;
     for &id in updates {
         if bw.bits_written().div_ceil(8) >= budget_bytes {
@@ -378,7 +376,6 @@ pub fn decode_snapshot(
     };
     let last_input_seq = r.read_bits(16)? as u16;
 
-    // Despawns.
     while r.read_bool()? {
         let id = ReplId(r.read_bits(32)? as u32);
         if let Some(e) = ids.entity(id) {
@@ -387,7 +384,6 @@ pub fn decode_snapshot(
         }
     }
 
-    // Spawns.
     while r.read_bool()? {
         let id = ReplId(r.read_bits(32)? as u32);
         if id.0 >= MAX_SPAWN_REPL_ID {
@@ -509,7 +505,6 @@ mod tests {
         },));
         let id = ids.allocate(e);
 
-        // Tick 1: spawn (absolute). Capture both sides' baseline states.
         let mut out = [0u8; 256];
         let (n, server_base, _) = encode_snapshot(
             &sr,
@@ -533,10 +528,8 @@ mod tests {
             .unwrap()
             .state;
 
-        // Change only x on the server.
         sw.get_mut::<TPos>(e).unwrap().x = 9.0;
 
-        // Tick 2: an update delta vs the baseline.
         let mut delta_buf = [0u8; 256];
         let (dn, _, _) = encode_snapshot(
             &sr,
@@ -554,7 +547,6 @@ mod tests {
         )
         .unwrap();
 
-        // Decode the delta against the client's baseline → only x changed.
         let outcome = decode_snapshot(
             &cr,
             &mut cw,
@@ -641,7 +633,6 @@ mod tests {
         decode_snapshot(&cr, &mut cw, &mut cids, &out[..n], None).unwrap();
         assert!(cids.entity(id).is_some());
 
-        // Tick 2: despawn it.
         let mut out2 = [0u8; 64];
         let (n2, _, _) = encode_snapshot(
             &sr,
@@ -683,7 +674,6 @@ mod tests {
             idv.push(ids.allocate(e));
         }
 
-        // Spawn all on the client first.
         let mut out = [0u8; 1024];
         let (n, server_base, _) = encode_snapshot(
             &sr,
@@ -707,7 +697,6 @@ mod tests {
             .unwrap()
             .state;
 
-        // Change every entity's x, then encode an update with a TINY budget.
         for (i, &e) in ents.iter().enumerate() {
             sw.get_mut::<TPos>(e).unwrap().x = 100.0 + i as f32;
         }

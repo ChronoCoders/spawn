@@ -115,7 +115,6 @@ mod tests {
 
     #[test]
     fn known_answer_vectors() {
-        // Canonical FNV-1a 64 test vectors.
         assert_eq!(hash_bytes(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(hash_bytes(b"foobar"), 0x85944171f73967e8);
     }

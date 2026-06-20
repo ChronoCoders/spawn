@@ -88,7 +88,6 @@ impl Touch {
                 return;
             }
         }
-        // Capacity reached: drop the event for the new id.
     }
 
     /// Iterates active touch points, including `Ended`/`Cancelled` for the one

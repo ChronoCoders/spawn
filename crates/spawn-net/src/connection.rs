@@ -179,7 +179,6 @@ impl UnreliableQueue {
 
     fn push(&mut self, bytes: &[u8]) {
         let idx = if self.len == UNRELIABLE_QUEUE_CAP {
-            // Drop oldest: advance head, reuse its slot.
             let old = self.head;
             self.head = (self.head + 1) % UNRELIABLE_QUEUE_CAP;
             old
@@ -701,7 +700,6 @@ mod tests {
     #[test]
     fn transmit_error_preserves_in_flight_fragmented_message() {
         let mut c = conn();
-        // Stage a reliable message larger than one datagram → fragmented, held in flight.
         let msg = vec![7u8; MAX_PAYLOAD_SIZE * 2];
         c.enqueue(ChannelId::ReliableOrdered, &msg).unwrap();
 
@@ -710,7 +708,6 @@ mod tests {
         let mut sink = FailSink;
         assert!(c.flush(&mut scratch, Instant::now(), &mut sink).is_err());
 
-        // The in-flight slot is still occupied: a second large enqueue is refused.
         assert!(matches!(
             c.enqueue(ChannelId::ReliableOrdered, &msg),
             Err(NetError::ChannelFull)

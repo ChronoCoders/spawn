@@ -22,8 +22,6 @@ impl Component for Velocity {}
 impl Component for Health {}
 impl Component for Tag {}
 
-// ---- layout ----
-
 const _: () = assert!(std::mem::size_of::<Entity>() == 8);
 
 #[test]
@@ -33,8 +31,6 @@ fn placeholder_never_returned_by_spawn() {
         assert!(!world.spawn().is_placeholder());
     }
 }
-
-// ---- generation recycling ----
 
 #[test]
 fn recycle_reuses_index_and_rejects_stale() {
@@ -73,8 +69,6 @@ fn many_recycle_cycles_bump_generation() {
         world.despawn(e).unwrap();
     }
 }
-
-// ---- archetype moves ----
 
 #[test]
 fn insert_remove_preserve_other_components() {
@@ -120,8 +114,6 @@ fn insert_overwrites_existing() {
     world.insert(e, Health(2)).unwrap();
     assert_eq!(*world.get::<Health>(e).unwrap(), Health(2));
 }
-
-// ---- query correctness ----
 
 #[test]
 fn query_with_without_filters() {
@@ -215,8 +207,6 @@ fn exact_size_iterator() {
     let iter = q.iter();
     assert_eq!(iter.len(), 4);
 }
-
-// ---- error paths ----
 
 #[test]
 fn stale_entity_structural_ops_error() {

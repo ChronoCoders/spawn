@@ -689,7 +689,6 @@ mod tests {
             e.set_bus_volume(BusId("missing"), 0.5),
             Err(AudioError::UnknownBus)
         ));
-        // Master is always present.
         e.set_bus_volume(BusId::MASTER, 0.25).unwrap();
         assert!(e.bus_volume(BusId::MASTER).unwrap().approx_eq(0.25, 1e-6));
     }

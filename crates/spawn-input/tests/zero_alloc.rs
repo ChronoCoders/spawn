@@ -64,7 +64,6 @@ fn key_event(key: KeyCode, pressed: bool) -> PlatformEvent {
 
 #[test]
 fn per_frame_path_does_not_allocate() {
-    // Setup (allocation permitted here; the guard is not yet armed).
     let mut input = InputState::new().expect("init");
     let mut map: ActionMap<Action> = ActionMap::new();
     let fire = Action(0);
@@ -80,7 +79,6 @@ fn per_frame_path_does_not_allocate() {
         }),
     ];
 
-    // Warm up so any lazy first-touch allocation happens before arming.
     for _ in 0..4 {
         input.begin_frame();
         for ev in &events {

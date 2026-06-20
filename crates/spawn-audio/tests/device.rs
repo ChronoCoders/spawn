@@ -49,7 +49,6 @@ fn plays_spatial_clip_on_device() {
     };
     let h = engine.play(&handle, params, &server).expect("play");
 
-    // Sweep the emitter from far-left, through the listener, to far-right.
     for step in 0..=100 {
         let x = -10.0 + (step as f32) * 0.2;
         engine.set_position(h, Vec3::new(x, 0.0, 0.0)).unwrap();

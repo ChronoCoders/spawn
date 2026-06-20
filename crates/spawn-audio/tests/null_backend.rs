@@ -39,7 +39,6 @@ fn unloaded_handle_play_errors() {
     .unwrap();
     spawn_audio::register(&mut server).unwrap();
 
-    // The file does not exist, so the handle never reaches Loaded.
     let handle = server.load::<spawn_audio::AudioSource>("missing.wav");
     for _ in 0..100 {
         server.apply_loaded();
@@ -84,8 +83,6 @@ fn bus_volume_unknown_and_master() {
 
 #[test]
 fn lifecycle_transitions_via_server() {
-    // Build a real AssetServer over a temp dir holding a tiny WAV, load it,
-    // pump, then drive the voice through its state machine.
     let dir = std::env::temp_dir().join(format!("spawn_audio_null_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("beep.wav");
@@ -100,7 +97,6 @@ fn lifecycle_transitions_via_server() {
     spawn_audio::register(&mut server).unwrap();
 
     let handle = server.load::<spawn_audio::AudioSource>("beep.wav");
-    // Pump the IO pool until the asset is loaded.
     for _ in 0..1000 {
         server.apply_loaded();
         if server.get(&handle).is_some() {
@@ -134,7 +130,6 @@ fn lifecycle_transitions_via_server() {
 
     engine.stop(h).unwrap();
     engine.update(0.016).unwrap();
-    // After stop is applied the slot is reaped; the handle is now stale.
     assert!(engine.voice_state(h).is_err());
     assert_eq!(engine.active_voice_count(), 0);
 

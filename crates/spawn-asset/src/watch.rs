@@ -113,9 +113,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut hot = HotReload::new(&dir, Duration::from_millis(50)).unwrap();
         let start = Instant::now();
-        // Inject by writing a file the watcher will report.
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
-        // Within the window: nothing ready yet.
         let _ = hot.collect_ready(start);
         let ready_late = loop {
             std::thread::sleep(Duration::from_millis(20));

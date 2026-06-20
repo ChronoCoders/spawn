@@ -280,7 +280,6 @@ mod tests {
         let clone = h.clone();
         let gen = h.slot().reload_commit(TextAsset("v2".into()));
         assert_eq!(gen, 1);
-        // The clone (same slot) sees the new payload without re-acquiring.
         assert_eq!(
             clone.slot().payload().map(|p| p.0.clone()),
             Some("v2".into())
@@ -292,13 +291,10 @@ mod tests {
         let s = slot(LoadState::Loading);
         let h = Handle::new(AssetId::from_raw(7), s);
         assert!(h.slot().commit_loaded(TextAsset("v1".into())));
-        // The slot is the only holder of the v1 Arc.
         let v1 = h.slot().payload().expect("loaded");
         assert_eq!(Arc::strong_count(&v1), 2);
         drop(v1);
         h.slot().reload_commit(TextAsset("v2".into()));
-        // After the swap the slot holds only v2; v1 has been dropped. Acquire a
-        // fresh snapshot and confirm it is the sole external reference.
         let v2 = h.slot().payload().expect("reloaded");
         assert_eq!(Arc::strong_count(&v2), 2);
     }
@@ -308,12 +304,9 @@ mod tests {
         let s = slot(LoadState::Loading);
         let h = Handle::new(AssetId::from_raw(7), s);
         assert!(h.slot().commit_loaded(TextAsset("v1".into())));
-        // Snapshot taken before the reload lands.
         let snapshot = h.slot().payload().expect("loaded");
         h.slot().reload_commit(TextAsset("v2".into()));
-        // The pre-reload snapshot still reads the old data, intact.
         assert_eq!(snapshot.0, "v1");
-        // A fresh get observes the new data.
         assert_eq!(h.slot().payload().map(|p| p.0.clone()), Some("v2".into()));
     }
 
@@ -330,7 +323,6 @@ mod tests {
         assert_eq!(h.slot().state(), LoadState::Failed);
         assert!(h.slot().payload().is_none());
         assert!(h.slot().error().is_some());
-        // The stale Arc is no longer retained by the slot.
         assert_eq!(Arc::strong_count(&stale), 1);
     }
 

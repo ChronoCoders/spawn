@@ -64,7 +64,6 @@ mod tests {
 
     #[test]
     fn fnv_is_stable_and_deterministic() {
-        // Known FNV-1a 64 vector: empty string hashes to the offset basis.
         assert_eq!(AssetId::from_canonical_path("").raw(), FNV_OFFSET_BASIS);
         let a = AssetId::from_canonical_path("a/b.txt");
         let b = AssetId::from_canonical_path("a/b.txt");

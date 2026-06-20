@@ -366,7 +366,6 @@ impl LiveEditor {
     fn tick_logic(&mut self) -> ShellResult<()> {
         let dt = self.sample_dt();
 
-        // Input.
         self.input.begin_frame();
         for event in self.pending.drain(..) {
             self.input.process(&event);
@@ -374,14 +373,12 @@ impl LiveEditor {
         let ui_input = bridge::ui_input(&self.input);
         let pointer = ui_input.pointer;
 
-        // UI routing.
         self.ui.update_input(&ui_input)?;
         let mut events: Vec<UiEvent> = Vec::new();
         self.ui.drain_events(&mut events)?;
         self.handle_toolbar(&events)?;
         self.handle_outliner(&events);
 
-        // Viewport routing.
         let target = bridge::pointer_target(self.viewport_rect, pointer);
         if target == PointerTarget::Viewport {
             self.handle_viewport(pointer)?;
@@ -398,7 +395,6 @@ impl LiveEditor {
             self.handle_inspector(&events, pointer)?;
         }
 
-        // Simulation.
         if self.editor.is_playing() {
             self.run_simulation(dt);
         }
@@ -427,7 +423,6 @@ impl LiveEditor {
         );
         self.ui.set_text(self.status_node, Some(status_text))?;
 
-        // Layout.
         let size = Vec2::new(
             self.size.width.max(1) as f32,
             self.size.height.max(1) as f32,
@@ -496,7 +491,6 @@ impl LiveEditor {
             || self.input.keyboard().is_pressed(KeyCode::ShiftRight);
         let escape = self.input.keyboard().just_pressed(KeyCode::Escape);
 
-        // Camera navigation.
         if middle_down && shift {
             self.camera.pan(delta);
         } else if middle_down {

@@ -220,7 +220,6 @@ mod tests {
         for _ in 0..20 {
             e.next_sequence();
         }
-        // peer acks 19 plus 18,17,15 via bits
         let mut out = AckedSequences::new();
         let bits = (1 << 0) | (1 << 1) | (1 << 3);
         e.process_acks(19, bits, &mut out);
@@ -228,7 +227,6 @@ mod tests {
         got.sort_unstable();
         assert_eq!(got, vec![15, 17, 18, 19]);
 
-        // re-process same: nothing new
         e.process_acks(19, bits, &mut out);
         assert!(out.as_slice().is_empty());
     }
@@ -236,7 +234,7 @@ mod tests {
     #[test]
     fn process_acks_ignores_unsent() {
         let mut e = ReliableEndpoint::new();
-        e.next_sequence(); // only 0 sent
+        e.next_sequence();
         let mut out = AckedSequences::new();
         e.process_acks(100, 0, &mut out);
         assert!(out.as_slice().is_empty());

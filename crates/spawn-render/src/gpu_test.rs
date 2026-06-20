@@ -201,14 +201,12 @@ fn occluder_casts_shadow_on_ground() {
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    // slot 0 = light view-proj (shadow pass), slot 1 = lit camera.
     queue.write_buffer(&camera_buffer, 0, bytemuck::bytes_of(&light_cam.uniform()));
     queue.write_buffer(
         &camera_buffer,
         camera_stride,
         bytemuck::bytes_of(&lit_cam.uniform()),
     );
-    // index 0 = occluder, index 1 = ground.
     let occluder_uniform = ModelUniform {
         model: columns(occluder_model),
     };

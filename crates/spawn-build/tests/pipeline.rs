@@ -63,7 +63,6 @@ fn incremental_skip_and_recompile() {
     assert_eq!(r2.compiled, 0);
     assert_eq!(r2.skipped, 3);
 
-    // mutate one file
     std::fs::write(root.join("b.txt"), b"BBBB").unwrap();
     let r3 = pipeline.build().unwrap();
     assert_eq!(r3.compiled, 1);
@@ -132,7 +131,6 @@ fn per_asset_failure_isolation() {
     assert_eq!(report.failed[0].0, bad_id);
     assert!(!report.is_success());
 
-    // index contains only the two good assets; the failed one is absent.
     let idx = spawn_build::PackIndex::read(&out.join("index.spawnpack")).unwrap();
     assert_eq!(idx.entries.len(), 2);
     assert!(!idx.entries.iter().any(|e| e.id == bad_id));
@@ -154,10 +152,8 @@ fn clean_removes_outputs() {
     assert!(!out.join("data").exists());
     assert!(!out.join("index.spawnpack").exists());
     assert!(!out.join("build.cache").exists());
-    // src untouched
     assert!(root.join("a.txt").is_file());
 
-    // second clean is a no-op success
     pipeline.clean().unwrap();
 }
 

@@ -260,7 +260,6 @@ mod tests {
         bytes.extend_from_slice(&PACK_VERSION.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
-        // entry header truncated
         bytes.extend_from_slice(&0u64.to_le_bytes());
         assert!(matches!(
             PackIndex::parse(&bytes),

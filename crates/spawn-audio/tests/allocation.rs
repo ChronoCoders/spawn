@@ -85,7 +85,6 @@ fn update_is_allocation_free_in_steady_state() {
     })
     .unwrap();
 
-    // Start several spatial voices, then flush their Start commands.
     for i in 0..8 {
         let params = PlaybackParams {
             looping: true,
@@ -97,12 +96,10 @@ fn update_is_allocation_free_in_steady_state() {
         };
         engine.play(&handle, params, &server).unwrap();
     }
-    // Drain the start queue and reach steady state.
     for _ in 0..4 {
         engine.update(0.016).unwrap();
     }
 
-    // Now measure: pure update over active spatial voices, no new commands.
     COUNTING.store(true, Ordering::Relaxed);
     let before = ALLOCS.load(Ordering::Relaxed);
     for _ in 0..600 {

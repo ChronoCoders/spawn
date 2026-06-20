@@ -92,7 +92,6 @@ fn server_full_denial() {
 
     let mut a = Client::new().unwrap();
     a.connect(saddr).unwrap();
-    // Connect first client fully.
     for _ in 0..50 {
         let _ = server.poll().unwrap().count();
         let _ = a.poll().unwrap().count();
@@ -208,11 +207,9 @@ fn oversize_payload_rejected() {
     let max = vec![1u8; MAX_PAYLOAD_SIZE];
     assert!(client.send(ChannelId::Unreliable, &max).is_ok());
 
-    // Above the single-datagram limit the message now fragments rather than erroring.
     let fragmented = vec![1u8; MAX_PAYLOAD_SIZE + 1];
     assert!(client.send(ChannelId::Unreliable, &fragmented).is_ok());
 
-    // Only beyond the fragmented ceiling is the message rejected.
     let over = vec![1u8; MAX_FRAGMENTED_PAYLOAD + 1];
     let err = client.send(ChannelId::Unreliable, &over).unwrap_err();
     assert!(matches!(
@@ -230,7 +227,6 @@ fn reliable_backpressure_then_recovers() {
     let mut client = Client::new().unwrap();
     connect(&mut server, &mut client);
 
-    // Fill the window without polling (no flush yet => nothing acked).
     let window = spawn_net::RELIABLE_SEND_WINDOW;
     for _ in 0..window {
         client.send(ChannelId::ReliableOrdered, b"x").unwrap();
@@ -385,13 +381,12 @@ impl DropProxy {
 fn reliable_delivery_under_simulated_drop() {
     let mut server = server_on(4);
     let saddr = server.local_addr().unwrap();
-    let mut proxy = DropProxy::new(saddr, 3); // drop every 3rd datagram each way
+    let mut proxy = DropProxy::new(saddr, 3);
     let proxy_addr = proxy.front_addr();
 
     let mut client = Client::new().unwrap();
     client.connect(proxy_addr).unwrap();
 
-    // Handshake through the lossy proxy.
     let mut connected = false;
     for _ in 0..200 {
         proxy.pump();
@@ -447,7 +442,6 @@ fn reliable_delivery_under_simulated_drop() {
 
 #[test]
 fn invalid_challenge_response_denied() {
-    // Hand-roll a client that sends a wrong ChallengeResponse and assert ConnectDenied.
     use std::net::UdpSocket;
     const HEADER_SIZE: usize = 14;
     const PROTOCOL_ID: u32 = 0x5350_4E31;
@@ -468,11 +462,10 @@ fn invalid_challenge_response_denied() {
     };
 
     let client_salt: u64 = 0xDEAD_BEEF_CAFE_F00D;
-    write_header(&mut pkt, 0); // ConnectRequest
+    write_header(&mut pkt, 0);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&client_salt.to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
 
-    // Pump server to produce a Challenge.
     let mut server_salt = None;
     for _ in 0..50 {
         let _ = server.poll().unwrap().count();
@@ -489,8 +482,7 @@ fn invalid_challenge_response_denied() {
     }
     assert!(server_salt.is_some());
 
-    // Send a WRONG connect_salt.
-    write_header(&mut pkt, 2); // ChallengeResponse
+    write_header(&mut pkt, 2);
     let wrong = 0u64;
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&wrong.to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
@@ -501,7 +493,6 @@ fn invalid_challenge_response_denied() {
         let mut rbuf = [0u8; 64];
         if let Ok((len, _)) = sock.recv_from(&mut rbuf) {
             if len > HEADER_SIZE && rbuf[4] == 4 {
-                // ConnectDenied with InvalidResponse (1).
                 assert_eq!(rbuf[HEADER_SIZE], 1);
                 denied = true;
                 break;
@@ -535,7 +526,6 @@ fn disconnect_salt_is_validated() {
         pkt[13] = 0xFF;
     };
 
-    // Handshake: ConnectRequest -> Challenge -> ChallengeResponse(correct) -> Accepted.
     let client_salt: u64 = 0x0123_4567_89AB_CDEF;
     write_header(&mut pkt, 0);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&client_salt.to_le_bytes());
@@ -558,7 +548,7 @@ fn disconnect_salt_is_validated() {
     let server_salt = server_salt.expect("no Challenge");
     let connect_salt = client_salt ^ server_salt;
 
-    write_header(&mut pkt, 2); // ChallengeResponse
+    write_header(&mut pkt, 2);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&connect_salt.to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
 
@@ -571,8 +561,7 @@ fn disconnect_salt_is_validated() {
     }
     assert_eq!(server.connected_clients(), 1, "handshake did not complete");
 
-    // Wrong-salt Disconnect from the same source: must be ignored.
-    write_header(&mut pkt, 7); // Disconnect
+    write_header(&mut pkt, 7);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&(!connect_salt).to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
     for _ in 0..20 {
@@ -584,7 +573,6 @@ fn disconnect_salt_is_validated() {
         "spoofed-salt Disconnect must not tear down the connection"
     );
 
-    // Correct-salt Disconnect: tears the connection down.
     write_header(&mut pkt, 7);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&connect_salt.to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
@@ -623,7 +611,7 @@ fn raw_connected(client_salt: u64) -> (Server, UdpSocket, u64) {
         pkt[13] = 0xFF;
     };
 
-    write_header(&mut pkt, 0); // ConnectRequest
+    write_header(&mut pkt, 0);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&client_salt.to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
 
@@ -644,7 +632,7 @@ fn raw_connected(client_salt: u64) -> (Server, UdpSocket, u64) {
     let server_salt = server_salt.expect("no Challenge");
     let connect_salt = client_salt ^ server_salt;
 
-    write_header(&mut pkt, 2); // ChallengeResponse
+    write_header(&mut pkt, 2);
     pkt[HEADER_SIZE..HEADER_SIZE + 8].copy_from_slice(&connect_salt.to_le_bytes());
     sock.send_to(&pkt[..HEADER_SIZE + 8], saddr).unwrap();
 
@@ -672,7 +660,7 @@ fn spoofed_keepalive_does_not_refresh_timeout() {
     let mut pkt = [0u8; 64];
     let write_keepalive = |pkt: &mut [u8], salt: u64| {
         pkt[0..4].copy_from_slice(&PROTOCOL_ID.to_le_bytes());
-        pkt[4] = 5; // KeepAlive
+        pkt[4] = 5;
         pkt[5..7].copy_from_slice(&0u16.to_le_bytes());
         pkt[7..9].copy_from_slice(&0u16.to_le_bytes());
         pkt[9..13].copy_from_slice(&0u32.to_le_bytes());
@@ -717,7 +705,7 @@ fn correct_keepalive_refreshes_timeout() {
     let mut pkt = [0u8; 64];
     let write_keepalive = |pkt: &mut [u8], salt: u64| {
         pkt[0..4].copy_from_slice(&PROTOCOL_ID.to_le_bytes());
-        pkt[4] = 5; // KeepAlive
+        pkt[4] = 5;
         pkt[5..7].copy_from_slice(&0u16.to_le_bytes());
         pkt[7..9].copy_from_slice(&0u16.to_le_bytes());
         pkt[9..13].copy_from_slice(&0u32.to_le_bytes());
@@ -750,7 +738,6 @@ fn fragmented_unreliable_delivers_intact() {
     let mut client = Client::new().unwrap();
     connect(&mut server, &mut client);
 
-    // > MAX_PAYLOAD_SIZE forces fragmentation across several datagrams.
     let msg = blob(3000);
     assert!(msg.len() > MAX_PAYLOAD_SIZE);
     server
@@ -783,7 +770,7 @@ fn fragmented_reliable_delivers_intact() {
     let mut client = Client::new().unwrap();
     connect(&mut server, &mut client);
 
-    let msg = blob(5000); // ~5 fragments
+    let msg = blob(5000);
     server.broadcast(ChannelId::ReliableOrdered, &msg).unwrap();
 
     let mut got: Option<Vec<u8>> = None;
@@ -808,7 +795,7 @@ fn fragmented_reliable_delivers_intact() {
 fn fragmented_reliable_delivers_intact_under_drop() {
     let mut server = server_on(4);
     let saddr = server.local_addr().unwrap();
-    let mut proxy = DropProxy::new(saddr, 3); // drop every 3rd datagram each way
+    let mut proxy = DropProxy::new(saddr, 3);
     let proxy_addr = proxy.front_addr();
 
     let mut client = Client::new().unwrap();
@@ -830,7 +817,7 @@ fn fragmented_reliable_delivers_intact_under_drop() {
     }
     assert!(connected, "handshake failed under drop");
 
-    let msg = blob(6000); // ~6 fragments; some dropped, resent until complete
+    let msg = blob(6000);
     server.broadcast(ChannelId::ReliableOrdered, &msg).unwrap();
 
     let mut got: Option<Vec<u8>> = None;
@@ -897,7 +884,6 @@ fn fragmented_backpressure_and_ceiling() {
         .unwrap_err();
     assert!(matches!(err, spawn_net::NetError::ChannelFull));
 
-    // Above the fragmented ceiling → PayloadTooLarge with the fragmented max.
     let over = vec![0u8; MAX_FRAGMENTED_PAYLOAD + 1];
     let err = server.send(cid, ChannelId::Unreliable, &over).unwrap_err();
     assert!(matches!(

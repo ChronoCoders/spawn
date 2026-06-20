@@ -324,7 +324,6 @@ impl UiTree {
                 FlexDirection::Column => cs.margin.horizontal(),
             };
 
-            // Cross sizing.
             let cross_dim = dim_cross(dir, cs.size);
             let min_cross = resolve_bound(dim_cross(dir, cs.min_size), Some(avail.cross), 0.0);
             let max_cross = resolve_bound(

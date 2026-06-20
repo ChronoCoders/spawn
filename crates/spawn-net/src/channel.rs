@@ -305,7 +305,6 @@ mod tests {
             s.queue(b"x").unwrap();
         }
         assert!(matches!(s.queue(b"y"), Err(NetError::ChannelFull)));
-        // ack one, room frees
         s.ack(0);
         assert_eq!(s.unacked(), RELIABLE_SEND_WINDOW - 1);
         assert!(s.queue(b"y").is_ok());
@@ -322,7 +321,6 @@ mod tests {
         let mut buf = vec![0u8; len];
         s.copy_staged_bytes(0, &mut buf);
         assert_eq!(buf, b"abc");
-        // Just sent: not due again immediately.
         assert_eq!(s.take_due(Instant::now()), 0);
     }
 
@@ -340,7 +338,7 @@ mod tests {
     fn reliable_receiver_dedup_and_guard() {
         let mut r = ReliableReceiver::new();
         assert!(r.accept(0, b"a"));
-        assert!(!r.accept(0, b"a")); // duplicate
+        assert!(!r.accept(0, b"a"));
         assert!(!r.accept(RELIABLE_RECV_WINDOW as u16, b"far")); // out of window
     }
 
@@ -348,8 +346,8 @@ mod tests {
     fn sequenced_latest_wins() {
         let mut r = SequencedReceiver::new();
         assert!(r.accept(5));
-        assert!(!r.accept(4)); // stale
+        assert!(!r.accept(4));
         assert!(r.accept(6));
-        assert!(!r.accept(6)); // not newer
+        assert!(!r.accept(6));
     }
 }

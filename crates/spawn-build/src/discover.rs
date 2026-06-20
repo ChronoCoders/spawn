@@ -255,7 +255,6 @@ mod tests {
         assert!(paths.contains(&"a/b.png"));
         assert!(!paths.contains(&"notes.txt"));
         assert!(!paths.iter().any(|p| p.ends_with(".tmp")));
-        // sorted by id
         let ids: Vec<u64> = entries.iter().map(|e| e.id.raw()).collect();
         let mut sorted = ids.clone();
         sorted.sort_unstable();

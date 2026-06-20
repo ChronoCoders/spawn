@@ -539,8 +539,8 @@ mod tests {
         let mut g = RenderGraph::new();
         let t = g.transient(color("gbuffer"));
         // Declared consumer-first; derivation must still order producer first.
-        g.add_pass(opaque(vec![t], g.surface())); // pass 0 reads t, writes surface
-        g.add_pass(opaque(Vec::new(), t)); // pass 1 writes t
+        g.add_pass(opaque(vec![t], g.surface()));
+        g.add_pass(opaque(Vec::new(), t));
         let plan = g.plan(SIZE).unwrap();
         assert_eq!(plan.order, vec![1, 0], "producer (1) before consumer (0)");
     }
@@ -588,7 +588,7 @@ mod tests {
     fn written_never_read_is_dangling() {
         let mut g = RenderGraph::new();
         let t = g.transient(color("orphan"));
-        g.add_pass(opaque(Vec::new(), t)); // writes t, nobody reads it
+        g.add_pass(opaque(Vec::new(), t));
         g.add_pass(opaque(Vec::new(), g.surface()));
         assert!(matches!(
             g.plan(SIZE),
@@ -603,10 +603,10 @@ mod tests {
         let mut g = RenderGraph::new();
         let t1 = g.transient(color("t1"));
         let t2 = g.transient(color("t2"));
-        g.add_pass(opaque(Vec::new(), t1)); // 0
-        g.add_pass(opaque(vec![t1], g.surface())); // 1 (reads t1)
-        g.add_pass(opaque(Vec::new(), t2)); // 2
-        g.add_pass(opaque(vec![t2], g.surface())); // 3 (reads t2)
+        g.add_pass(opaque(Vec::new(), t1));
+        g.add_pass(opaque(vec![t1], g.surface()));
+        g.add_pass(opaque(Vec::new(), t2));
+        g.add_pass(opaque(vec![t2], g.surface()));
         let plan = g.plan(SIZE).unwrap();
         assert_eq!(
             plan.transient_memory * 2,

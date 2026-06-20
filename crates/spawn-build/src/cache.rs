@@ -138,7 +138,6 @@ mod tests {
         );
         cache.save(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        // sorted: id 0x01 line comes first
         assert!(text.starts_with("0000000000000001"));
         let loaded = BuildCache::load(&path).unwrap();
         assert_eq!(loaded, cache);

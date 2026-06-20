@@ -402,7 +402,7 @@ mod tests {
         let mut ids = ReplIdMap::new();
         let viewer = w.spawn_with((at(0.0, 0.0), Replicated, OwnerOnly(ClientId(1))));
         ids.allocate(viewer);
-        let e = w.spawn_with((at(100.0, 0.0), Replicated)); // far away
+        let e = w.spawn_with((at(100.0, 0.0), Replicated));
         let id = ids.allocate(e);
 
         let mut v = vis();
@@ -412,19 +412,16 @@ mod tests {
         assert!(v.spawns(ClientId(1)).iter().all(|&s| s != id));
         assert!(!v.is_visible(ClientId(1), id));
 
-        // Move into view.
         *w.get_mut::<Transform3D>(e).unwrap() = at(5.0, 0.0);
         v.update(&w, &ids);
         assert_eq!(v.spawns(ClientId(1)), &[id], "exactly one spawn on enter");
         assert!(v.despawns(ClientId(1)).is_empty());
         assert!(v.is_visible(ClientId(1), id));
 
-        // Stay in view: no event.
         v.update(&w, &ids);
         assert!(v.spawns(ClientId(1)).is_empty());
         assert!(v.despawns(ClientId(1)).is_empty());
 
-        // Leave view.
         *w.get_mut::<Transform3D>(e).unwrap() = at(100.0, 0.0);
         v.update(&w, &ids);
         assert!(v.spawns(ClientId(1)).is_empty());
@@ -534,7 +531,7 @@ mod tests {
         let mut ids = ReplIdMap::new();
         let viewer = w.spawn_with((at(0.0, 0.0), Replicated, OwnerOnly(ClientId(1))));
         ids.allocate(viewer);
-        let e = w.spawn_with((at(-10.0, 0.0), Replicated)); // inside enter (10 < 16)
+        let e = w.spawn_with((at(-10.0, 0.0), Replicated));
         let id = ids.allocate(e);
 
         let mut v = vis();
@@ -542,7 +539,6 @@ mod tests {
         v.update(&w, &ids);
         assert!(v.is_visible(ClientId(1), id), "entity enters at -10");
 
-        // Into the hysteresis band on the negative axis: 16 < 18 < exit 20.
         *w.get_mut::<Transform3D>(e).unwrap() = at(-18.0, 0.0);
         v.update(&w, &ids);
         assert!(
@@ -590,7 +586,6 @@ mod tests {
         v.update(&w, &ids);
         assert!(v.is_visible(ClientId(1), id));
 
-        // Despawn: remove from the world and from replication, then update.
         w.despawn(e).unwrap();
         ids.release(e);
         v.remove_entity(id);

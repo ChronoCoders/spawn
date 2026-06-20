@@ -84,7 +84,6 @@ fn loader_dispatch_and_state_transitions() {
     assert!(srv.get(&text).is_none());
 
     pump_until_loaded(&srv, Duration::from_secs(3));
-    // Drain any straggler completions.
     for _ in 0..50 {
         srv.apply_loaded();
         if srv.load_state(&text) == LoadState::Loaded && srv.load_state(&bin) == LoadState::Loaded {
@@ -178,7 +177,6 @@ fn handle_lifetime_unload_and_weak() {
         pump_until_loaded(&srv, Duration::from_secs(3));
         weak = h.downgrade();
         assert!(weak.upgrade().is_some());
-        // h dropped here.
     }
     let mut unloaded = 0;
     for _ in 0..50 {

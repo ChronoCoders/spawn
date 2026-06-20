@@ -190,15 +190,12 @@ mod tests {
         // Default listener faces -Z, right is +X.
         assert!(stereo_pan(l, Vec3::new(1.0, 0.0, 0.0)) > 0.9);
         assert!(stereo_pan(l, Vec3::new(-1.0, 0.0, 0.0)) < -0.9);
-        // Straight ahead (-Z) is centered.
         assert!(stereo_pan(l, Vec3::new(0.0, 0.0, -1.0)).approx_eq(0.0, 1e-5));
-        // Co-located is centered.
         assert!(stereo_pan(l, Vec3::ZERO).approx_eq_default(0.0));
     }
 
     #[test]
     fn stereo_pan_respects_orientation() {
-        // Rotate listener 180deg about Y: right vector flips to -X.
         let l = Listener {
             position: Vec3::ZERO,
             orientation: Quat::from_rotation_y(std::f32::consts::PI),
