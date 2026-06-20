@@ -222,6 +222,8 @@ fn editor_frame_composes_and_renders() {
         transparent: &[],
         instances: &[],
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: Some(Overlay {
             tree: &ui,
             draw_list: &draw_list,

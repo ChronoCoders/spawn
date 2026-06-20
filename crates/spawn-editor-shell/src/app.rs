@@ -670,6 +670,8 @@ impl LiveEditor {
             transparent: &[],
             instances: &[],
             pbr_instances: &[],
+            skinned: &[],
+            pbr_skinned: &[],
             overlay: Some(overlay),
         };
 

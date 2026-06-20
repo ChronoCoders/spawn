@@ -13,6 +13,7 @@ use crate::mesh::Mesh;
 use crate::passes::overlay::Overlay;
 use crate::pipeline::ModelUniform;
 use crate::renderer::Renderer;
+use crate::skeleton::GpuJoint;
 
 /// The scene to render: one active camera, optional lighting (required by the
 /// shadow, lit, and PBR passes), the caller-ordered unlit/lit draws, the PBR
@@ -34,6 +35,12 @@ pub struct RenderScene<'a> {
     /// Physically based instanced batches, recorded in the `ForwardPbr` pass and
     /// cast into the shadow map.
     pub pbr_instances: &'a [PbrInstanceBatch<'a>],
+    /// Unlit skinned draws (GPU vertex skinning), recorded in the `ForwardOpaque`
+    /// pass and cast into the shadow map.
+    pub skinned: &'a [SkinnedDrawItem<'a>],
+    /// Physically based skinned draws, recorded in the `ForwardPbr` pass and cast
+    /// into the shadow map.
+    pub pbr_skinned: &'a [PbrSkinnedDrawItem<'a>],
     pub overlay: Option<Overlay<'a>>,
 }
 
@@ -100,6 +107,25 @@ pub struct PbrInstanceBatch<'a> {
     pub instances: &'a [InstanceData],
 }
 
+/// An unlit skinned draw: a `SkinnedVertex` mesh plus the pre-composed per-joint
+/// skinning matrices for this instance (uploaded to the joint storage buffer). The
+/// `joints` length must match the skeleton that produced them.
+pub struct SkinnedDrawItem<'a> {
+    pub mesh: &'a Mesh,
+    pub material: &'a Material,
+    pub model: Mat4,
+    pub joints: &'a [GpuJoint],
+}
+
+/// A physically based skinned draw (the `ForwardPbr` analogue of
+/// [`SkinnedDrawItem`]).
+pub struct PbrSkinnedDrawItem<'a> {
+    pub mesh: &'a Mesh,
+    pub material: &'a PbrMaterial,
+    pub model: Mat4,
+    pub joints: &'a [GpuJoint],
+}
+
 pub(crate) fn model_uniform(model: Mat4) -> ModelUniform {
     let c = |v: spawn_core::Vec4| [v.x, v.y, v.z, v.w];
     ModelUniform {
@@ -132,6 +158,10 @@ pub(crate) fn record(
     for (i, draw) in scene.draws.iter().enumerate() {
         renderer.write_model(i as u32, &model_uniform(draw.model));
     }
+    let skinned_base = skinned_model_base(scene);
+    for (i, draw) in scene.skinned.iter().enumerate() {
+        renderer.write_model(skinned_base + i as u32, &model_uniform(draw.model));
+    }
 
     let color_load = match clear_color {
         Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
@@ -151,6 +181,9 @@ pub(crate) fn record(
     let camera_bind_group = &renderer.camera_bind_group;
     let instance_bind_group = renderer.instance_bind_group();
     let instanced_key = renderer.instanced_opaque_pipeline_key();
+    let joint_bind_group = renderer.joint_bind_group();
+    let skinned_key = renderer.skinned_opaque_pipeline_key();
+    let joint_bases = &renderer.joint_bases;
     let cache = &renderer.cache;
     let model_stride = renderer.model_stride();
 
@@ -218,6 +251,25 @@ pub(crate) fn record(
         }
     }
 
+    // Skinned opaque draws: each binds the joint storage at its dynamic-offset
+    // base (group 2) and reads its model from the per-draw slot. One draw each.
+    if !scene.skinned.is_empty() {
+        let pipeline = cache.get(&skinned_key)?;
+        pass.set_pipeline(pipeline);
+        for (i, draw) in scene.skinned.iter().enumerate() {
+            let model_offset = (u64::from(skinned_base + i as u32) * model_stride) as u32;
+            pass.set_bind_group(0, camera_bind_group, &[camera_offset, model_offset]);
+            pass.set_bind_group(1, draw.material.bind_group(), &[]);
+            pass.set_bind_group(2, joint_bind_group, &[joint_bases[i]]);
+            pass.set_vertex_buffer(0, draw.mesh.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                draw.mesh.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..draw.mesh.index_count(), 0, 0..1);
+        }
+    }
+
     Ok(())
 }
 
@@ -230,6 +282,18 @@ pub(crate) fn opaque_instance_total(scene: &RenderScene) -> u32 {
         .iter()
         .map(|b| b.instances.len() as u32)
         .sum()
+}
+
+/// First model-buffer slot for the opaque-skinned draws (after the lit, PBR, and
+/// transparent draws, which also use the per-draw model buffer).
+pub(crate) fn skinned_model_base(scene: &RenderScene) -> u32 {
+    (scene.draws.len() + scene.pbr_draws.len() + scene.transparent.len()) as u32
+}
+
+/// First model-buffer slot for the PBR-skinned draws (after the opaque-skinned
+/// draws).
+pub(crate) fn pbr_skinned_model_base(scene: &RenderScene) -> u32 {
+    skinned_model_base(scene) + scene.skinned.len() as u32
 }
 
 #[cfg(test)]

@@ -62,6 +62,15 @@ pub(crate) fn device_lost_error(device_lost: bool) -> RenderResult<()> {
     }
 }
 
+/// Rounds `value` up to the next multiple of `align` (a power of two ≥ 1). Used to
+/// place each skinned draw's joint block at a storage-offset-aligned base.
+fn align_up_u64(value: u64, align: u64) -> u64 {
+    if align <= 1 {
+        return value;
+    }
+    value.div_ceil(align) * align
+}
+
 impl<'w> Renderer<'w> {
     /// Acquires the surface texture and creates the frame encoder.
     ///
@@ -113,13 +122,18 @@ impl FrameContext<'_, '_> {
     pub fn execute(&mut self, graph: &CompiledGraph, scene: &RenderScene) -> RenderResult<()> {
         self.renderer
             .ensure_camera_capacity(graph.order().len() as u32);
-        // Size the shared per-draw model buffer once, up front, for the lit
-        // (`draws`), PBR (`pbr_draws`), and transparent lists so no pass
-        // reallocates mid-frame (which would invalidate already-recorded bind
-        // groups). The lists occupy disjoint slot ranges: `draws` in `[0, D)`,
-        // `pbr_draws` in `[D, D+P)`, `transparent` in `[D+P, D+P+T)`.
+        // Size the shared per-draw model buffer once, up front, for every list
+        // that uses it so no pass reallocates mid-frame (which would invalidate
+        // already-recorded bind groups). The lists occupy disjoint slot ranges:
+        // `draws` `[0, D)`, `pbr_draws` `[D, D+P)`, `transparent` `[D+P, D+P+T)`,
+        // `skinned` next, then `pbr_skinned` (instanced draws read the storage
+        // buffer, not the model buffer).
         self.renderer.ensure_model_capacity(
-            (scene.draws.len() + scene.pbr_draws.len() + scene.transparent.len()) as u32,
+            (scene.draws.len()
+                + scene.pbr_draws.len()
+                + scene.transparent.len()
+                + scene.skinned.len()
+                + scene.pbr_skinned.len()) as u32,
         );
         // Upload all instance data once, up front, into the shared storage buffer:
         // opaque batches first (`[0, total_opaque)`), then PBR batches. The opaque,
@@ -147,6 +161,50 @@ impl FrameContext<'_, '_> {
                 self.renderer.write_instances(base, batch.instances);
                 base += batch.instances.len() as u32;
             }
+        }
+        // Upload skinned joint matrices once, up front: opaque-skinned draws then
+        // PBR-skinned, each block aligned to the storage offset alignment with a
+        // window of slack past the last block (the dynamic-offset binding window).
+        // The per-draw byte bases are recorded for the record paths.
+        {
+            let align = self.renderer.joint_align();
+            let max_joints = self.renderer.max_joints_per_draw();
+            let window = max_joints * 64;
+            let mut bases = std::mem::take(&mut self.renderer.joint_bases);
+            bases.clear();
+            let mut cur = 0u64;
+            for draw in scene.skinned {
+                if draw.joints.len() as u64 > max_joints {
+                    self.renderer.joint_bases = bases;
+                    return Err(RenderError::InstanceBufferOverflow {
+                        context: "skinned draw exceeds the joint window",
+                    });
+                }
+                bases.push(cur as u32);
+                cur += align_up_u64(draw.joints.len() as u64 * 64, align);
+            }
+            for draw in scene.pbr_skinned {
+                if draw.joints.len() as u64 > max_joints {
+                    self.renderer.joint_bases = bases;
+                    return Err(RenderError::InstanceBufferOverflow {
+                        context: "skinned draw exceeds the joint window",
+                    });
+                }
+                bases.push(cur as u32);
+                cur += align_up_u64(draw.joints.len() as u64 * 64, align);
+            }
+            if !bases.is_empty() {
+                self.renderer.ensure_joint_capacity(cur + window);
+                let opaque_skinned = scene.skinned.len();
+                for (i, draw) in scene.skinned.iter().enumerate() {
+                    self.renderer.write_joints(u64::from(bases[i]), draw.joints);
+                }
+                for (i, draw) in scene.pbr_skinned.iter().enumerate() {
+                    self.renderer
+                        .write_joints(u64::from(bases[opaque_skinned + i]), draw.joints);
+                }
+            }
+            self.renderer.joint_bases = bases;
         }
         let camera_stride = self.renderer.camera_stride();
         let scene_camera = scene.camera.uniform();

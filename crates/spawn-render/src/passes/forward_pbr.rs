@@ -11,7 +11,9 @@
 use spawn_core::Color;
 
 use crate::error::RenderResult;
-use crate::passes::forward_opaque::{model_uniform, opaque_instance_total, RenderScene};
+use crate::passes::forward_opaque::{
+    model_uniform, opaque_instance_total, pbr_skinned_model_base, RenderScene,
+};
 use crate::renderer::Renderer;
 
 /// Records the PBR pass into `encoder` against `color_view` (the HDR scene
@@ -36,6 +38,10 @@ pub(crate) fn record(
     for (i, draw) in scene.pbr_draws.iter().enumerate() {
         renderer.write_model(base + i as u32, &model_uniform(draw.model));
     }
+    let skinned_base = pbr_skinned_model_base(scene);
+    for (i, draw) in scene.pbr_skinned.iter().enumerate() {
+        renderer.write_model(skinned_base + i as u32, &model_uniform(draw.model));
+    }
 
     let color_load = match clear_color {
         Some(c) => wgpu::LoadOp::Clear(wgpu::Color {
@@ -55,6 +61,10 @@ pub(crate) fn record(
     let camera_bind_group = &renderer.camera_bind_group;
     let instance_bind_group = renderer.instance_bind_group();
     let instanced_key = renderer.instanced_pbr_pipeline_key();
+    let joint_bind_group = renderer.joint_bind_group();
+    let skinned_key = renderer.skinned_pbr_pipeline_key();
+    let joint_bases = &renderer.joint_bases;
+    let opaque_skinned = scene.skinned.len();
     let cache = &renderer.cache;
     let model_stride = renderer.model_stride();
     let pipeline = cache.get(&renderer.pbr_pipeline_key())?;
@@ -115,6 +125,27 @@ pub(crate) fn record(
             );
             pass.draw_indexed(0..batch.mesh.index_count(), 0, base..base + count);
             base += count;
+        }
+    }
+
+    // Skinned PBR draws: joint storage at group 3 (dynamic offset per draw), model
+    // from the per-draw slot. PBR-skinned joint blocks follow the opaque-skinned
+    // ones in the shared joint buffer.
+    if !scene.pbr_skinned.is_empty() {
+        let skinned_pipeline = cache.get(&skinned_key)?;
+        pass.set_pipeline(skinned_pipeline);
+        pass.set_bind_group(2, light_bind_group, &[]);
+        for (i, draw) in scene.pbr_skinned.iter().enumerate() {
+            let model_offset = (u64::from(skinned_base + i as u32) * model_stride) as u32;
+            pass.set_bind_group(0, camera_bind_group, &[camera_offset, model_offset]);
+            pass.set_bind_group(1, draw.material.bind_group(), &[]);
+            pass.set_bind_group(3, joint_bind_group, &[joint_bases[opaque_skinned + i]]);
+            pass.set_vertex_buffer(0, draw.mesh.vertex_buffer().slice(..));
+            pass.set_index_buffer(
+                draw.mesh.index_buffer().slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..draw.mesh.index_count(), 0, 0..1);
         }
     }
 

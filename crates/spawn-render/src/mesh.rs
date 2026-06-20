@@ -38,6 +38,46 @@ impl Vertex {
     }
 }
 
+/// Skinned mesh vertex: the [`Vertex`] fields (position/normal/uv) plus four
+/// joint influences — `joints` (indices into the skeleton) and `weights` (assumed
+/// normalized by the loader). `#[repr(C)]` + `Pod`; layout asserted below.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SkinnedVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+    pub joints: [u16; 4],
+    pub weights: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<SkinnedVertex>() == 56);
+const _: () = assert!(std::mem::offset_of!(SkinnedVertex, position) == 0);
+const _: () = assert!(std::mem::offset_of!(SkinnedVertex, normal) == 12);
+const _: () = assert!(std::mem::offset_of!(SkinnedVertex, uv) == 24);
+const _: () = assert!(std::mem::offset_of!(SkinnedVertex, joints) == 32);
+const _: () = assert!(std::mem::offset_of!(SkinnedVertex, weights) == 40);
+
+impl SkinnedVertex {
+    /// Attribute table: location 0 position, 1 normal, 2 uv, 3 joint indices
+    /// (`Uint16x4`), 4 joint weights (`Float32x4`).
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x3,
+        1 => Float32x3,
+        2 => Float32x2,
+        3 => Uint16x4,
+        4 => Float32x4,
+    ];
+
+    pub const fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkinnedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 /// Overlay UI vertex: clip-space position (the overlay builds positions in NDC on
 /// the CPU from the surface size), atlas/texture UV, and a premultiplied-free
 /// RGBA color the fragment multiplies by the sampled texel. `#[repr(C)]` + `Pod`.
@@ -135,6 +175,49 @@ impl Mesh {
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("spawn-mesh-index"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Ok(Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+        })
+    }
+
+    /// Uploads `vertices`/`indices` for a skinned mesh (the [`SkinnedVertex`]
+    /// layout). Same validation as [`Mesh::new`]; the vertex buffer is interpreted
+    /// by a `VertexLayoutId::Skinned` pipeline.
+    pub fn new_skinned(
+        device: &wgpu::Device,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> RenderResult<Self> {
+        if vertices.is_empty() {
+            return Err(RenderError::InvalidArgument {
+                context: "skinned mesh has no vertices",
+            });
+        }
+        if indices.is_empty() {
+            return Err(RenderError::InvalidArgument {
+                context: "skinned mesh has no indices",
+            });
+        }
+        let vertex_count = vertices.len() as u32;
+        if indices.iter().any(|&i| i >= vertex_count) {
+            return Err(RenderError::InvalidArgument {
+                context: "skinned mesh index out of range",
+            });
+        }
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("spawn-skinned-mesh-vertex"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("spawn-skinned-mesh-index"),
             contents: bytemuck::cast_slice(indices),
             usage: wgpu::BufferUsages::INDEX,
         });

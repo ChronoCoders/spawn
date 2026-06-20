@@ -23,8 +23,9 @@ use crate::pipeline::{
 };
 use crate::shaders::{
     INSTANCED_OPAQUE_WGSL, INSTANCED_PBR_WGSL, INSTANCED_SHADOW_WGSL, LIT_WGSL, PBR_WGSL,
-    SHADOW_WGSL, TONEMAP_WGSL,
+    SHADOW_WGSL, SKINNED_OPAQUE_WGSL, SKINNED_PBR_WGSL, SKINNED_SHADOW_WGSL, TONEMAP_WGSL,
 };
+use crate::skeleton::GpuJoint;
 use crate::texture::{SamplerConfig, Texture};
 
 /// The linear HDR format the `ForwardPbr`/scene passes render into before the
@@ -96,6 +97,14 @@ pub struct Renderer<'w> {
     instanced_opaque_pipeline_key: PipelineKey,
     instanced_pbr_pipeline_key: PipelineKey,
     instanced_shadow_pipeline_key: PipelineKey,
+    joint_buffer: wgpu::Buffer,
+    joint_bind_group: wgpu::BindGroup,
+    joint_capacity: u64,
+    joint_align: u64,
+    pub(crate) joint_bases: Vec<u32>,
+    skinned_opaque_pipeline_key: PipelineKey,
+    skinned_pbr_pipeline_key: PipelineKey,
+    skinned_shadow_pipeline_key: PipelineKey,
     pub(crate) overlay: OverlayState,
     pub(crate) fallback_texture: Texture,
     pub(crate) fallback_normal: Texture,
@@ -464,6 +473,77 @@ impl<'w> Renderer<'w> {
         let instance_bind_group =
             make_instance_bind_group(&device, &layouts.instance, &instance_buffer);
 
+        // Skinned built-ins: unlit, PBR, and depth-only shadow variants, each
+        // blending four joint matrices read from the group joint storage. Built
+        // once here.
+        let skinned_opaque_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_SKINNED_OPAQUE_SHADER_ID));
+        let skinned_shadow_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_SKINNED_SHADOW_SHADER_ID));
+        let skinned_pbr_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_SKINNED_PBR_SHADER_ID));
+        shaders.load(&device, skinned_opaque_shader, SKINNED_OPAQUE_WGSL)?;
+        shaders.load(&device, skinned_shadow_shader, SKINNED_SHADOW_WGSL)?;
+        shaders.load(&device, skinned_pbr_shader, SKINNED_PBR_WGSL)?;
+        let skinned_opaque_pipeline_key = PipelineKey {
+            shader: skinned_opaque_shader,
+            vertex_layout: VertexLayoutId::Skinned,
+            render_state: RenderStateKey {
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ForwardOpaque,
+            instanced: false,
+        };
+        let skinned_pbr_pipeline_key = PipelineKey {
+            shader: skinned_pbr_shader,
+            vertex_layout: VertexLayoutId::Skinned,
+            render_state: RenderStateKey {
+                color_format: HDR_FORMAT,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ForwardPbr,
+            instanced: false,
+        };
+        let skinned_shadow_pipeline_key = PipelineKey {
+            shader: skinned_shadow_shader,
+            vertex_layout: VertexLayoutId::Skinned,
+            render_state: RenderStateKey {
+                color_format: surface_format,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: true,
+                cull: CullMode::None,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::ShadowDepth,
+            instanced: false,
+        };
+        cache.get_or_create(&device, &layouts, skinned_opaque_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, skinned_pbr_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, skinned_shadow_pipeline_key, &shaders)?;
+
+        // The joint storage binding is dynamic-offset (a fixed window per draw
+        // selected by base), so per-draw bases align to the device storage offset
+        // alignment and the buffer carries a window of slack past the last block.
+        let joint_align = device.limits().min_storage_buffer_offset_alignment.max(1) as u64;
+        let joint_capacity = (INITIAL_JOINT_BYTES).max(JOINT_WINDOW_BYTES);
+        let joint_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-joint-storage"),
+            size: joint_capacity,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let joint_bind_group = make_joint_bind_group(&device, &layouts.joint, &joint_buffer);
+
         let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spawn-light-uniform"),
             size: std::mem::size_of::<LightUniform>() as u64,
@@ -563,6 +643,14 @@ impl<'w> Renderer<'w> {
             instanced_opaque_pipeline_key,
             instanced_pbr_pipeline_key,
             instanced_shadow_pipeline_key,
+            joint_buffer,
+            joint_bind_group,
+            joint_capacity,
+            joint_align,
+            joint_bases: Vec::new(),
+            skinned_opaque_pipeline_key,
+            skinned_pbr_pipeline_key,
+            skinned_shadow_pipeline_key,
             overlay,
             fallback_texture,
             fallback_normal,
@@ -892,6 +980,66 @@ impl<'w> Renderer<'w> {
         );
     }
 
+    /// Cache keys of the built-in skinned pipelines (opaque, PBR, depth-only
+    /// shadow), each blending four joint matrices in the vertex stage.
+    pub(crate) fn skinned_opaque_pipeline_key(&self) -> PipelineKey {
+        self.skinned_opaque_pipeline_key
+    }
+
+    pub(crate) fn skinned_pbr_pipeline_key(&self) -> PipelineKey {
+        self.skinned_pbr_pipeline_key
+    }
+
+    pub(crate) fn skinned_shadow_pipeline_key(&self) -> PipelineKey {
+        self.skinned_shadow_pipeline_key
+    }
+
+    /// The joint storage bind group (dynamic-offset window). Rebuilt only when the
+    /// joint buffer grows, never per frame.
+    pub(crate) fn joint_bind_group(&self) -> &wgpu::BindGroup {
+        &self.joint_bind_group
+    }
+
+    /// The device storage-buffer offset alignment; per-draw joint bases must be a
+    /// multiple of this.
+    pub(crate) fn joint_align(&self) -> u64 {
+        self.joint_align
+    }
+
+    /// The maximum joints a single skinned draw may carry (the dynamic-offset
+    /// window size).
+    pub(crate) fn max_joints_per_draw(&self) -> u64 {
+        MAX_JOINTS_PER_DRAW
+    }
+
+    /// Ensures the joint storage buffer holds at least `bytes`, reallocating (and
+    /// rebuilding the joint bind group) only on growth.
+    pub(crate) fn ensure_joint_capacity(&mut self, bytes: u64) {
+        if bytes <= self.joint_capacity {
+            return;
+        }
+        let new_capacity = bytes.next_power_of_two().max(INITIAL_JOINT_BYTES);
+        self.joint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("spawn-joint-storage"),
+            size: new_capacity,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.joint_capacity = new_capacity;
+        self.joint_bind_group =
+            make_joint_bind_group(&self.device, &self.layouts.joint, &self.joint_buffer);
+    }
+
+    /// Writes `data` (one skeleton's skin matrices) into the joint storage buffer
+    /// at byte offset `base` in place. Caller guarantees capacity and alignment.
+    pub(crate) fn write_joints(&self, base: u64, data: &[GpuJoint]) {
+        if data.is_empty() {
+            return;
+        }
+        self.queue
+            .write_buffer(&self.joint_buffer, base, bytemuck::cast_slice(data));
+    }
+
     /// Builds a fullscreen-pass group-0 bind group sampling `input_view` (a scene
     /// transient) with the renderer's clamp/linear sampler. Built at graph
     /// compile/resize, never per frame.
@@ -957,10 +1105,11 @@ const INITIAL_MODEL_CAPACITY: u32 = 256;
 const INITIAL_CAMERA_CAPACITY: u32 = 8;
 const INITIAL_INSTANCE_CAPACITY: u32 = 256;
 
-// Reserved `AssetId` raw values for the engine's built-in shaders. Picked at the
-// top of the id space so an app's content ids do not collide. `MAX-2`/`MAX-3` are
-// the overlay UI/line shaders (see `passes::overlay`), so the PBR and tonemap
-// shaders take `MAX-4`/`MAX-5` to avoid aliasing in the shared `ShaderStore`.
+// Reserved `AssetId` raw values for the engine's built-in shaders, packed at the
+// top of the id space so an app's content ids do not collide and each is distinct
+// in the shared `ShaderStore`: `MAX`/`MAX-1` lit/shadow, `MAX-2`/`MAX-3` the
+// overlay UI/line shaders (see `passes::overlay`), `MAX-4`/`MAX-5` PBR/tonemap,
+// `MAX-6..8` instanced opaque/shadow/PBR, `MAX-9..11` skinned opaque/shadow/PBR.
 const BUILTIN_LIT_SHADER_ID: u64 = u64::MAX;
 const BUILTIN_SHADOW_SHADER_ID: u64 = u64::MAX - 1;
 const BUILTIN_PBR_SHADER_ID: u64 = u64::MAX - 4;
@@ -968,6 +1117,17 @@ const BUILTIN_TONEMAP_SHADER_ID: u64 = u64::MAX - 5;
 const BUILTIN_INSTANCED_OPAQUE_SHADER_ID: u64 = u64::MAX - 6;
 const BUILTIN_INSTANCED_SHADOW_SHADER_ID: u64 = u64::MAX - 7;
 const BUILTIN_INSTANCED_PBR_SHADER_ID: u64 = u64::MAX - 8;
+const BUILTIN_SKINNED_OPAQUE_SHADER_ID: u64 = u64::MAX - 9;
+const BUILTIN_SKINNED_SHADOW_SHADER_ID: u64 = u64::MAX - 10;
+const BUILTIN_SKINNED_PBR_SHADER_ID: u64 = u64::MAX - 11;
+
+/// Maximum joints per skinned draw: the fixed dynamic-offset window into the joint
+/// storage buffer. A draw whose skeleton exceeds this is rejected with
+/// [`RenderError::InstanceBufferOverflow`].
+const MAX_JOINTS_PER_DRAW: u64 = 256;
+/// Byte size of one joint window (`MAX_JOINTS_PER_DRAW` × `size_of::<GpuJoint>()`).
+const JOINT_WINDOW_BYTES: u64 = MAX_JOINTS_PER_DRAW * 64;
+const INITIAL_JOINT_BYTES: u64 = JOINT_WINDOW_BYTES * 4;
 
 fn align_up(value: u64, align: u64) -> u64 {
     if align <= 1 {
@@ -987,6 +1147,27 @@ fn make_instance_bind_group(
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
             resource: instance_buffer.as_entire_binding(),
+        }],
+    })
+}
+
+fn make_joint_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    joint_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("spawn-joint-bg"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            // Fixed-size window from offset 0; the per-draw dynamic offset shifts it
+            // to the draw's joint block.
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: joint_buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new(JOINT_WINDOW_BYTES),
+            }),
         }],
     })
 }

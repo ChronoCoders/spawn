@@ -15,8 +15,9 @@ use crate::format::{CompareFn, CullMode, DepthFormat, TextureFormat, Topology};
 use crate::graph::PassKind;
 use crate::light::LightUniform;
 use crate::material::{MaterialUniform, PbrMaterialUniform};
-use crate::mesh::{LineVertex, UiVertex, Vertex};
+use crate::mesh::{LineVertex, SkinnedVertex, UiVertex, Vertex};
 use crate::passes::forward_opaque::InstanceData;
+use crate::skeleton::GpuJoint;
 
 /// The vertex layout a pipeline consumes. Part of the cache key so pipelines with
 /// different vertex inputs are distinct entries.
@@ -24,6 +25,9 @@ use crate::passes::forward_opaque::InstanceData;
 pub enum VertexLayoutId {
     /// The 3D mesh vertex (position/normal/uv) — forward and shadow passes.
     PositionNormalUv,
+    /// The skinned mesh vertex (position/normal/uv + joint indices/weights). Its
+    /// pipelines bind the joint storage group and read per-vertex joint matrices.
+    Skinned,
     /// The 2D overlay UI vertex (clip position / uv / color).
     UiQuad,
     /// The overlay line vertex (world position / color).
@@ -165,6 +169,10 @@ pub struct BindGroupLayouts {
     /// shader by `@builtin(instance_index)` (the model is read in the vertex stage,
     /// the tint in the fragment stage).
     pub instance: wgpu::BindGroupLayout,
+    /// Per-skeleton joint storage group appended to a skinned pipeline's layout: a
+    /// read-only `array<mat4x4<f32>>` at binding 0 with a dynamic offset selecting
+    /// the draw's joint range; read in the vertex stage.
+    pub joint: wgpu::BindGroupLayout,
     /// Overlay UI texture group (group 0 of the UI pipeline): a float texture at
     /// binding 0 and a filtering sampler at binding 1. Bound to the 1×1 white
     /// texture for solid rects/borders, or a font atlas for text.
@@ -342,6 +350,19 @@ impl BindGroupLayouts {
                 count: None,
             }],
         });
+        let joint = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("spawn-joint-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<GpuJoint>() as u64),
+                },
+                count: None,
+            }],
+        });
         let overlay_texture = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spawn-overlay-texture-bgl"),
             entries: &[
@@ -370,6 +391,7 @@ impl BindGroupLayouts {
             pbr_material,
             fullscreen,
             instance,
+            joint,
             overlay_texture,
         }
     }
@@ -438,19 +460,22 @@ impl PipelineCache {
                 PassKind::Overlay2D => match key.vertex_layout {
                     VertexLayoutId::UiQuad => &[&layouts.overlay_texture],
                     VertexLayoutId::OverlayLine => &[&layouts.camera],
-                    VertexLayoutId::PositionNormalUv => {
+                    VertexLayoutId::PositionNormalUv | VertexLayoutId::Skinned => {
                         return Err(RenderError::InvalidArgument {
                             context: "overlay pipeline needs a UiQuad or OverlayLine vertex layout",
                         })
                     }
                 },
             };
-            // An instanced pipeline appends the per-instance storage group after the
+            // An instanced or skinned pipeline appends its storage group after the
             // pass's groups, so its index is the highest in the layout (group 2 for
-            // opaque, 3 for PBR, 1 for shadow).
+            // opaque, 3 for PBR, 1 for shadow). Instancing and skinning are mutually
+            // exclusive this phase, so at most one group is appended.
             let mut bind_group_layouts = base_layouts.to_vec();
             if key.instanced {
                 bind_group_layouts.push(&layouts.instance);
+            } else if key.vertex_layout == VertexLayoutId::Skinned {
+                bind_group_layouts.push(&layouts.joint);
             }
             let bind_group_layouts = bind_group_layouts.as_slice();
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -517,6 +542,7 @@ impl PipelineCache {
             // bind no vertex buffer; every other pass consumes one vertex layout.
             let mesh_buffer = [match key.vertex_layout {
                 VertexLayoutId::PositionNormalUv => Vertex::layout(),
+                VertexLayoutId::Skinned => SkinnedVertex::layout(),
                 VertexLayoutId::UiQuad => UiVertex::layout(),
                 VertexLayoutId::OverlayLine => LineVertex::layout(),
             }];

@@ -64,6 +64,21 @@ pub enum RenderError {
     ShadowConfigInvalid {
         context: &'static str,
     },
+    /// A skeleton is empty, has a parent index out of range, or is not
+    /// topologically ordered (a joint's parent must precede it).
+    SkeletonInvalid {
+        context: &'static str,
+    },
+    /// An animation clip has an empty or non-finite track, mismatched keyframe
+    /// array lengths, or a joint count that disagrees with its skeleton.
+    AnimationInvalid {
+        context: &'static str,
+    },
+    /// An instance or joint batch exceeds a fixed capacity (e.g. a skinned draw's
+    /// skeleton is larger than the joint dynamic-offset window).
+    InstanceBufferOverflow {
+        context: &'static str,
+    },
 }
 
 impl std::fmt::Display for RenderError {
@@ -107,6 +122,11 @@ impl std::fmt::Display for RenderError {
             }
             Self::ShadowConfigInvalid { context } => {
                 write!(f, "invalid shadow configuration: {context}")
+            }
+            Self::SkeletonInvalid { context } => write!(f, "invalid skeleton: {context}"),
+            Self::AnimationInvalid { context } => write!(f, "invalid animation clip: {context}"),
+            Self::InstanceBufferOverflow { context } => {
+                write!(f, "instance/joint buffer overflow: {context}")
             }
         }
     }

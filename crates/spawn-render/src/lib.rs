@@ -10,6 +10,7 @@
 //! steady state. Conventions are inherited from `spawn-core`: right-handed,
 //! column-major matrices, depth range `[0, 1]`.
 
+mod animation;
 mod asset_handle;
 mod camera;
 mod error;
@@ -26,9 +27,11 @@ mod pipeline;
 mod renderer;
 mod resources;
 mod shaders;
+mod skeleton;
 mod text;
 mod texture;
 
+pub use animation::{AnimationClip, ClipPlayer, JointTrack, Pose};
 pub use asset_handle::ShaderHandle;
 pub use camera::{Camera, CameraUniform};
 pub use error::{RenderError, RenderResult, SourceLocation};
@@ -45,9 +48,10 @@ pub use light::{DirectionalLight, Lighting, ShadowConfig};
 pub use material::{
     pbr_texture_flags, Material, MaterialUniform, PbrMaps, PbrMaterial, PbrMaterialUniform,
 };
-pub use mesh::{Mesh, Vertex};
+pub use mesh::{Mesh, SkinnedVertex, Vertex};
 pub use passes::forward_opaque::{
-    DrawItem, InstanceBatch, InstanceData, PbrDrawItem, PbrInstanceBatch, RenderScene,
+    DrawItem, InstanceBatch, InstanceData, PbrDrawItem, PbrInstanceBatch, PbrSkinnedDrawItem,
+    RenderScene, SkinnedDrawItem,
 };
 pub use passes::overlay::{FontRegistry, LineSegment, Overlay};
 pub use pipeline::{
@@ -55,5 +59,6 @@ pub use pipeline::{
 };
 pub use renderer::{HasWindowHandleSet, Renderer, RendererConfig};
 pub use resources::RenderResources;
+pub use skeleton::{GpuJoint, Joint, Skeleton, ROOT_JOINT};
 pub use text::{Font, Glyph};
 pub use texture::{SamplerConfig, Texture};

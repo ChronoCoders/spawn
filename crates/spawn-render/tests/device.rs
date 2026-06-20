@@ -146,6 +146,8 @@ fn zero_net_engine_allocation_per_frame() {
             transparent: &[],
             instances: &[],
             pbr_instances: &[],
+            skinned: &[],
+            pbr_skinned: &[],
             overlay: None,
         };
         let mut frame = renderer.begin_frame().expect("begin");
@@ -215,6 +217,8 @@ fn compiled_graph_executes_and_presents() {
         transparent: &[],
         instances: &[],
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: None,
     };
 
@@ -528,6 +532,8 @@ fn lit_graph_executes_with_shadow_pass() {
         transparent: &[],
         instances: &[],
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: None,
     };
 
@@ -678,6 +684,8 @@ fn pbr_graph_executes_with_tonemap() {
         transparent: &[],
         instances: &[],
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: None,
     };
 
@@ -865,6 +873,8 @@ fn transparent_graph_executes() {
         transparent: &transparent,
         instances: &[],
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: None,
     };
 
@@ -983,6 +993,8 @@ fn instanced_opaque_graph_executes() {
         transparent: &[],
         instances: &batches,
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: None,
     };
 
@@ -1137,6 +1149,8 @@ fn instanced_pbr_graph_executes() {
         transparent: &[],
         instances: &[],
         pbr_instances: &batches,
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: None,
     };
 
@@ -1151,6 +1165,268 @@ fn instanced_pbr_graph_executes() {
     frame
         .execute(&compiled, &scene)
         .expect("execute instanced pbr graph");
+    frame.end_frame().expect("end");
+}
+
+/// GPU instance required: builds a one-joint skeleton, composes its bind-pose skin
+/// matrices, and renders a skinned PBR mesh through shadow → PBR(HDR) → tonemap.
+/// Exercises the skinned PBR + skinned shadow pipelines, the `SkinnedVertex`
+/// layout, and the dynamic-offset joint storage with no wgpu validation errors.
+#[test]
+fn skinned_pbr_graph_executes() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_asset::AssetId;
+    use spawn_core::Transform3D;
+    use spawn_render::{
+        CompareFn, CullMode, Joint, Lighting, Mesh, PbrMaps, PbrMaterial, PbrMaterialUniform,
+        PbrSkinnedDrawItem, RenderStateKey, ResourceDesc, ResourceKind, ShaderHandle, SizeSpec,
+        Skeleton, SkinnedVertex, Topology, ROOT_JOINT,
+    };
+
+    let placeholder = ShaderHandle::from_id(AssetId::from_raw(16));
+    let material = PbrMaterial::new(
+        &renderer,
+        placeholder,
+        PbrMaterialUniform::default(),
+        PbrMaps::default(),
+        RenderStateKey {
+            color_format: renderer.hdr_format(),
+            depth_format: renderer.depth_format(),
+            depth_compare: CompareFn::Less,
+            depth_write: true,
+            cull: CullMode::Back,
+            topology: Topology::TriangleList,
+        },
+    )
+    .expect("pbr material");
+
+    let skeleton = Skeleton::new(vec![Joint {
+        parent: ROOT_JOINT,
+        inverse_bind: spawn_core::Mat4::IDENTITY,
+    }])
+    .expect("skeleton");
+    let skin = skeleton
+        .skin_matrices(&[Transform3D::IDENTITY])
+        .expect("skin matrices");
+
+    let n = [0.0, 1.0, 0.0];
+    let sv = |p: [f32; 3], uv: [f32; 2]| SkinnedVertex {
+        position: p,
+        normal: n,
+        uv,
+        joints: [0, 0, 0, 0],
+        weights: [1.0, 0.0, 0.0, 0.0],
+    };
+    let verts = [
+        sv([-1.0, 0.0, -1.0], [0.0, 0.0]),
+        sv([1.0, 0.0, -1.0], [1.0, 0.0]),
+        sv([1.0, 0.0, 1.0], [1.0, 1.0]),
+        sv([-1.0, 0.0, 1.0], [0.0, 1.0]),
+    ];
+    let mesh = Mesh::new_skinned(renderer.device(), &verts, &[0, 1, 2, 0, 2, 3]).expect("mesh");
+
+    let pbr_skinned = [PbrSkinnedDrawItem {
+        mesh: &mesh,
+        material: &material,
+        model: spawn_core::Mat4::IDENTITY,
+        joints: &skin,
+    }];
+
+    let mut g = RenderGraph::new();
+    let surface = g.surface();
+    let depth = g.primary_depth();
+    let shadow_map = g.transient(ResourceDesc {
+        name: "shadow-map",
+        format: renderer.depth_format().to_wgpu(),
+        size: SizeSpec::Fixed {
+            width: 1024,
+            height: 1024,
+        },
+        kind: ResourceKind::Depth,
+    });
+    let hdr = g.transient(ResourceDesc {
+        name: "scene-hdr",
+        format: renderer.hdr_format(),
+        size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+        kind: ResourceKind::Color,
+    });
+    g.add_pass(PassDesc {
+        name: "shadow",
+        kind: PassKind::ShadowDepth,
+        reads: Vec::new(),
+        color: None,
+        depth: Some(DepthWrite {
+            target: shadow_map,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "pbr",
+        kind: PassKind::ForwardPbr,
+        reads: vec![shadow_map],
+        color: Some(ColorWrite {
+            target: hdr,
+            clear: Some(Color::new(0.0, 0.0, 0.0, 1.0)),
+        }),
+        depth: Some(DepthWrite {
+            target: depth,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "tonemap",
+        kind: PassKind::Tonemap,
+        reads: vec![hdr],
+        color: Some(ColorWrite {
+            target: surface,
+            clear: Some(Color::BLACK),
+        }),
+        depth: None,
+    });
+    let compiled = g.compile(&renderer).expect("compile skinned pbr graph");
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let lighting = Lighting::default();
+    let scene = RenderScene {
+        camera: &camera,
+        lighting: Some(&lighting),
+        draws: &[],
+        pbr_draws: &[],
+        transparent: &[],
+        instances: &[],
+        pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &pbr_skinned,
+        overlay: None,
+    };
+
+    let mut frame = match renderer.begin_frame() {
+        Ok(frame) => frame,
+        Err(RenderError::Surface | RenderError::SurfaceTimeout) => {
+            eprintln!("device.rs: surface not presentable on this host; skipping (spec §13 gate)");
+            return;
+        }
+        Err(e) => panic!("begin_frame: {e}"),
+    };
+    frame
+        .execute(&compiled, &scene)
+        .expect("execute skinned pbr graph");
+    frame.end_frame().expect("end");
+}
+
+/// GPU instance required: renders a skinned unlit mesh through a single
+/// `ForwardOpaque` pass, exercising the skinned opaque pipeline + joint storage.
+#[test]
+fn skinned_opaque_graph_executes() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_asset::AssetId;
+    use spawn_core::Transform3D;
+    use spawn_render::{
+        CompareFn, CullMode, Joint, Material, MaterialUniform, Mesh, RenderStateKey, ShaderHandle,
+        Skeleton, SkinnedDrawItem, SkinnedVertex, Topology, ROOT_JOINT,
+    };
+
+    let placeholder = ShaderHandle::from_id(AssetId::from_raw(17));
+    let material = Material::new(
+        &renderer,
+        placeholder,
+        MaterialUniform::default(),
+        None,
+        RenderStateKey {
+            color_format: renderer.surface_format(),
+            depth_format: renderer.depth_format(),
+            depth_compare: CompareFn::Less,
+            depth_write: true,
+            cull: CullMode::Back,
+            topology: Topology::TriangleList,
+        },
+    )
+    .expect("material");
+
+    let skeleton = Skeleton::new(vec![Joint {
+        parent: ROOT_JOINT,
+        inverse_bind: spawn_core::Mat4::IDENTITY,
+    }])
+    .expect("skeleton");
+    let skin = skeleton
+        .skin_matrices(&[Transform3D::IDENTITY])
+        .expect("skin matrices");
+
+    let n = [0.0, 0.0, 1.0];
+    let sv = |p: [f32; 3]| SkinnedVertex {
+        position: p,
+        normal: n,
+        uv: [0.0, 0.0],
+        joints: [0, 0, 0, 0],
+        weights: [1.0, 0.0, 0.0, 0.0],
+    };
+    let verts = [
+        sv([-0.5, -0.5, 0.0]),
+        sv([0.5, -0.5, 0.0]),
+        sv([0.5, 0.5, 0.0]),
+        sv([-0.5, 0.5, 0.0]),
+    ];
+    let mesh = Mesh::new_skinned(renderer.device(), &verts, &[0, 1, 2, 0, 2, 3]).expect("mesh");
+    let skinned = [SkinnedDrawItem {
+        mesh: &mesh,
+        material: &material,
+        model: spawn_core::Mat4::IDENTITY,
+        joints: &skin,
+    }];
+
+    let mut g = RenderGraph::new();
+    g.add_pass(PassDesc {
+        name: "opaque",
+        kind: PassKind::ForwardOpaque,
+        reads: Vec::new(),
+        color: Some(ColorWrite {
+            target: g.surface(),
+            clear: Some(Color::BLACK),
+        }),
+        depth: Some(DepthWrite {
+            target: g.primary_depth(),
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    let compiled = g.compile(&renderer).expect("compile skinned opaque graph");
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let draws: [DrawItem; 0] = [];
+    let scene = RenderScene {
+        camera: &camera,
+        lighting: None,
+        draws: &draws,
+        pbr_draws: &[],
+        transparent: &[],
+        instances: &[],
+        pbr_instances: &[],
+        skinned: &skinned,
+        pbr_skinned: &[],
+        overlay: None,
+    };
+
+    let mut frame = match renderer.begin_frame() {
+        Ok(frame) => frame,
+        Err(RenderError::Surface | RenderError::SurfaceTimeout) => {
+            eprintln!("device.rs: surface not presentable on this host; skipping (spec §13 gate)");
+            return;
+        }
+        Err(e) => panic!("begin_frame: {e}"),
+    };
+    frame
+        .execute(&compiled, &scene)
+        .expect("execute skinned opaque graph");
     frame.end_frame().expect("end");
 }
 
@@ -1252,6 +1528,8 @@ fn overlay_graph_executes() {
         transparent: &[],
         instances: &[],
         pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
         overlay: Some(overlay),
     };
 
