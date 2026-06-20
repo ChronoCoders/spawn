@@ -327,6 +327,7 @@ impl RenderBackend for WgpuBackend {
             lighting: Some(&proxies.lighting),
             draws: &draws,
             pbr_draws: &[],
+            transparent: &[],
             overlay,
         };
         let mut frame = self.renderer.begin_frame()?;

@@ -219,6 +219,7 @@ fn editor_frame_composes_and_renders() {
         lighting: Some(&lighting),
         draws: &draws,
         pbr_draws: &[],
+        transparent: &[],
         overlay: Some(Overlay {
             tree: &ui,
             draw_list: &draw_list,

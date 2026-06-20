@@ -84,6 +84,8 @@ pub struct Renderer<'w> {
     shadow_pipeline_key: PipelineKey,
     pbr_pipeline_key: PipelineKey,
     tonemap_pipeline_key: PipelineKey,
+    transparent_pipeline_key: PipelineKey,
+    pub(crate) transparent_scratch: Vec<(f32, u32)>,
     pub(crate) overlay: OverlayState,
     pub(crate) fallback_texture: Texture,
     pub(crate) fallback_normal: Texture,
@@ -357,8 +359,25 @@ impl<'w> Renderer<'w> {
             },
             pass: PassKind::Tonemap,
         };
+        // The transparent pass reuses the lit shader (Lambert + ambient + PCF
+        // shadow) but blends into the HDR scene with depth-write off, so it is a
+        // distinct cache entry from `ForwardLit`.
+        let transparent_pipeline_key = PipelineKey {
+            shader: lit_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: RenderStateKey {
+                color_format: HDR_FORMAT,
+                depth_format: config.depth_format,
+                depth_compare: CompareFn::Less,
+                depth_write: false,
+                cull: CullMode::Back,
+                topology: Topology::TriangleList,
+            },
+            pass: PassKind::Transparent,
+        };
         cache.get_or_create(&device, &layouts, pbr_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, tonemap_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, transparent_pipeline_key, &shaders)?;
 
         let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spawn-light-uniform"),
@@ -451,6 +470,8 @@ impl<'w> Renderer<'w> {
             shadow_pipeline_key,
             pbr_pipeline_key,
             tonemap_pipeline_key,
+            transparent_pipeline_key,
+            transparent_scratch: Vec::new(),
             overlay,
             fallback_texture,
             fallback_normal,
@@ -719,6 +740,12 @@ impl<'w> Renderer<'w> {
     /// The cache key of the built-in fullscreen tonemap pipeline.
     pub(crate) fn tonemap_pipeline_key(&self) -> PipelineKey {
         self.tonemap_pipeline_key
+    }
+
+    /// The cache key of the built-in transparent pipeline (lit shading, alpha
+    /// blend, depth-test-no-write; used by the `Transparent` pass for every draw).
+    pub(crate) fn transparent_pipeline_key(&self) -> PipelineKey {
+        self.transparent_pipeline_key
     }
 
     /// Builds a fullscreen-pass group-0 bind group sampling `input_view` (a scene

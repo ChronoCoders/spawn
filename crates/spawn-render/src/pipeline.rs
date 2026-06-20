@@ -402,7 +402,9 @@ impl PipelineCache {
             // resource interface.
             let bind_group_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
                 PassKind::ForwardOpaque => &[&layouts.camera, &layouts.material],
-                PassKind::ForwardLit => &[&layouts.camera, &layouts.material, &layouts.light],
+                PassKind::ForwardLit | PassKind::Transparent => {
+                    &[&layouts.camera, &layouts.material, &layouts.light]
+                }
                 PassKind::ForwardPbr => &[&layouts.camera, &layouts.pbr_material, &layouts.light],
                 PassKind::Tonemap => &[&layouts.fullscreen],
                 PassKind::ShadowDepth => &[&layouts.camera],
@@ -437,6 +439,20 @@ impl PipelineCache {
             };
             let blend = match key.pass {
                 PassKind::Overlay2D => Some(wgpu::BlendState::ALPHA_BLENDING),
+                // Straight-alpha over-compositing: color = src.a·src + (1-src.a)·dst,
+                // alpha = src.a + (1-src.a)·dst.a.
+                PassKind::Transparent => Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
                 _ => None,
             };
 
@@ -452,6 +468,7 @@ impl PipelineCache {
                 PassKind::ForwardOpaque
                 | PassKind::ForwardLit
                 | PassKind::ForwardPbr
+                | PassKind::Transparent
                 | PassKind::Tonemap
                 | PassKind::Overlay2D => Some(wgpu::FragmentState {
                     module,

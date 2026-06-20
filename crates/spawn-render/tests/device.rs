@@ -143,6 +143,7 @@ fn zero_net_engine_allocation_per_frame() {
             lighting: None,
             draws: &draws,
             pbr_draws: &[],
+            transparent: &[],
             overlay: None,
         };
         let mut frame = renderer.begin_frame().expect("begin");
@@ -209,6 +210,7 @@ fn compiled_graph_executes_and_presents() {
         lighting: None,
         draws: &draws,
         pbr_draws: &[],
+        transparent: &[],
         overlay: None,
     };
 
@@ -518,6 +520,7 @@ fn lit_graph_executes_with_shadow_pass() {
         lighting: Some(&lighting),
         draws: &draws,
         pbr_draws: &[],
+        transparent: &[],
         overlay: None,
     };
 
@@ -665,6 +668,7 @@ fn pbr_graph_executes_with_tonemap() {
         lighting: Some(&lighting),
         draws: &draws,
         pbr_draws: &pbr_draws,
+        transparent: &[],
         overlay: None,
     };
 
@@ -677,6 +681,193 @@ fn pbr_graph_executes_with_tonemap() {
         Err(e) => panic!("begin_frame: {e}"),
     };
     frame.execute(&compiled, &scene).expect("execute pbr graph");
+    frame.end_frame().expect("end");
+}
+
+/// GPU instance required: compiles the transparency graph (shadow → PBR into HDR →
+/// transparent blend into HDR → tonemap to surface) and executes it with one
+/// opaque PBR draw plus two translucent draws. Exercises the alpha-blend pipeline,
+/// the back-to-front sort, depth-test-no-write, and reading+writing the HDR
+/// transient across the PBR and transparent passes — no wgpu validation errors.
+#[test]
+fn transparent_graph_executes() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_asset::AssetId;
+    use spawn_render::{
+        CompareFn, CullMode, Lighting, Material, MaterialUniform, Mesh, PbrDrawItem, PbrMaps,
+        PbrMaterial, PbrMaterialUniform, RenderStateKey, ResourceDesc, ResourceKind, ShaderHandle,
+        SizeSpec, Topology, Vertex,
+    };
+
+    let placeholder = ShaderHandle::from_id(AssetId::from_raw(13));
+    let pbr_state = RenderStateKey {
+        color_format: renderer.hdr_format(),
+        depth_format: renderer.depth_format(),
+        depth_compare: CompareFn::Less,
+        depth_write: true,
+        cull: CullMode::Back,
+        topology: Topology::TriangleList,
+    };
+    let pbr_material = PbrMaterial::new(
+        &renderer,
+        placeholder,
+        PbrMaterialUniform::default(),
+        PbrMaps::default(),
+        pbr_state,
+    )
+    .expect("pbr material");
+    // The transparent pass uses the built-in transparent pipeline; the material
+    // only supplies group 1 (its own state is never looked up). Alpha < 1 blends.
+    let glass = Material::new(
+        &renderer,
+        placeholder,
+        MaterialUniform {
+            base_color: [0.2, 0.6, 1.0, 0.5],
+            params: [0.0; 4],
+        },
+        None,
+        pbr_state,
+    )
+    .expect("glass material");
+
+    let n = [0.0, 1.0, 0.0];
+    let verts = [
+        Vertex {
+            position: [-1.0, 0.0, -1.0],
+            normal: n,
+            uv: [0.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0, -1.0],
+            normal: n,
+            uv: [1.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0, 1.0],
+            normal: n,
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            position: [-1.0, 0.0, 1.0],
+            normal: n,
+            uv: [0.0, 1.0],
+        },
+    ];
+    let mesh = Mesh::new(renderer.device(), &verts, &[0, 1, 2, 0, 2, 3]).expect("mesh");
+
+    let mut g = RenderGraph::new();
+    let surface = g.surface();
+    let depth = g.primary_depth();
+    let shadow_map = g.transient(ResourceDesc {
+        name: "shadow-map",
+        format: renderer.depth_format().to_wgpu(),
+        size: SizeSpec::Fixed {
+            width: 1024,
+            height: 1024,
+        },
+        kind: ResourceKind::Depth,
+    });
+    let hdr = g.transient(ResourceDesc {
+        name: "scene-hdr",
+        format: renderer.hdr_format(),
+        size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+        kind: ResourceKind::Color,
+    });
+    g.add_pass(PassDesc {
+        name: "shadow",
+        kind: PassKind::ShadowDepth,
+        reads: Vec::new(),
+        color: None,
+        depth: Some(DepthWrite {
+            target: shadow_map,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "pbr",
+        kind: PassKind::ForwardPbr,
+        reads: vec![shadow_map],
+        color: Some(ColorWrite {
+            target: hdr,
+            clear: Some(Color::new(0.0, 0.0, 0.0, 1.0)),
+        }),
+        depth: Some(DepthWrite {
+            target: depth,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "transparent",
+        kind: PassKind::Transparent,
+        reads: vec![hdr],
+        color: Some(ColorWrite {
+            target: hdr,
+            clear: None,
+        }),
+        depth: Some(DepthWrite {
+            target: depth,
+            clear: None,
+            write: false,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "tonemap",
+        kind: PassKind::Tonemap,
+        reads: vec![hdr],
+        color: Some(ColorWrite {
+            target: surface,
+            clear: Some(Color::BLACK),
+        }),
+        depth: None,
+    });
+    let compiled = g.compile(&renderer).expect("compile transparent graph");
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let lighting = Lighting::default();
+    let pbr_draws = [PbrDrawItem {
+        mesh: &mesh,
+        material: &pbr_material,
+        model: spawn_core::Mat4::IDENTITY,
+    }];
+    let transparent = [
+        DrawItem {
+            mesh: &mesh,
+            material: &glass,
+            model: spawn_core::Mat4::from_translation(spawn_core::Vec3::new(0.0, 1.0, 0.0)),
+        },
+        DrawItem {
+            mesh: &mesh,
+            material: &glass,
+            model: spawn_core::Mat4::from_translation(spawn_core::Vec3::new(0.0, 2.0, 0.0)),
+        },
+    ];
+    let draws: [DrawItem; 0] = [];
+    let scene = RenderScene {
+        camera: &camera,
+        lighting: Some(&lighting),
+        draws: &draws,
+        pbr_draws: &pbr_draws,
+        transparent: &transparent,
+        overlay: None,
+    };
+
+    let mut frame = match renderer.begin_frame() {
+        Ok(frame) => frame,
+        Err(RenderError::Surface | RenderError::SurfaceTimeout) => {
+            eprintln!("device.rs: surface not presentable on this host; skipping (spec §13 gate)");
+            return;
+        }
+        Err(e) => panic!("begin_frame: {e}"),
+    };
+    frame
+        .execute(&compiled, &scene)
+        .expect("execute transparent graph");
     frame.end_frame().expect("end");
 }
 
@@ -775,6 +966,7 @@ fn overlay_graph_executes() {
         lighting: None,
         draws: &draws,
         pbr_draws: &[],
+        transparent: &[],
         overlay: Some(overlay),
     };
 

@@ -667,6 +667,7 @@ impl LiveEditor {
             lighting: Some(&lighting),
             draws: &draws,
             pbr_draws: &[],
+            transparent: &[],
             overlay: Some(overlay),
         };
 

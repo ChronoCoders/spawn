@@ -5,7 +5,9 @@ use crate::camera::CameraUniform;
 use crate::error::{RenderError, RenderResult};
 use crate::graph::{CompiledGraph, PassKind};
 use crate::passes::forward_opaque::RenderScene;
-use crate::passes::{forward_lit, forward_opaque, forward_pbr, overlay, post, shadow_depth};
+use crate::passes::{
+    forward_lit, forward_opaque, forward_pbr, overlay, post, shadow_depth, transparent,
+};
 use crate::renderer::Renderer;
 
 /// Holds the acquired surface texture, its view, and the command encoder for one
@@ -111,12 +113,14 @@ impl FrameContext<'_, '_> {
     pub fn execute(&mut self, graph: &CompiledGraph, scene: &RenderScene) -> RenderResult<()> {
         self.renderer
             .ensure_camera_capacity(graph.order().len() as u32);
-        // Size the shared per-draw model buffer once, up front, for both the lit
-        // (`draws`) and PBR (`pbr_draws`) lists so no pass reallocates mid-frame
-        // (which would invalidate already-recorded bind groups). The lists occupy
-        // disjoint slot ranges: `draws` in `[0, D)`, `pbr_draws` in `[D, D+P)`.
-        self.renderer
-            .ensure_model_capacity((scene.draws.len() + scene.pbr_draws.len()) as u32);
+        // Size the shared per-draw model buffer once, up front, for the lit
+        // (`draws`), PBR (`pbr_draws`), and transparent lists so no pass
+        // reallocates mid-frame (which would invalidate already-recorded bind
+        // groups). The lists occupy disjoint slot ranges: `draws` in `[0, D)`,
+        // `pbr_draws` in `[D, D+P)`, `transparent` in `[D+P, D+P+T)`.
+        self.renderer.ensure_model_capacity(
+            (scene.draws.len() + scene.pbr_draws.len() + scene.transparent.len()) as u32,
+        );
         let camera_stride = self.renderer.camera_stride();
         let scene_camera = scene.camera.uniform();
 
@@ -164,7 +168,10 @@ impl FrameContext<'_, '_> {
                         scene,
                     )?;
                 }
-                PassKind::ForwardOpaque | PassKind::ForwardLit | PassKind::ForwardPbr => {
+                PassKind::ForwardOpaque
+                | PassKind::ForwardLit
+                | PassKind::ForwardPbr
+                | PassKind::Transparent => {
                     self.renderer.write_camera_slot(slot as u32, &scene_camera);
                     let color = pass.color.ok_or(RenderError::InvalidArgument {
                         context: "forward pass needs a color target",
@@ -207,6 +214,25 @@ impl FrameContext<'_, '_> {
                                         context: "PBR pass requires a compiled light bind group",
                                     })?;
                             forward_pbr::record(
+                                self.renderer,
+                                encoder,
+                                color_view,
+                                color.clear,
+                                clear_depth,
+                                camera_offset,
+                                light_bind_group,
+                                scene,
+                            )?;
+                        }
+                        PassKind::Transparent => {
+                            let light_bind_group =
+                                graph
+                                    .light_bind_group()
+                                    .ok_or(RenderError::InvalidArgument {
+                                        context:
+                                            "transparent pass requires a compiled light bind group",
+                                    })?;
+                            transparent::record(
                                 self.renderer,
                                 encoder,
                                 color_view,

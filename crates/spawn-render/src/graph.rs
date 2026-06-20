@@ -79,6 +79,11 @@ pub enum PassKind {
     /// writing the linear HDR scene transient. The tonemap pass reduces it to the
     /// LDR surface.
     ForwardPbr,
+    /// Alpha-blended forward pass for transparent draws, recorded after the
+    /// opaque/PBR pass: `SrcAlpha`/`OneMinusSrcAlpha` blend, depth-tested (`Less`)
+    /// with depth-write off, drawn back-to-front. Reads the HDR color + scene
+    /// depth, writes the HDR color (lit + shadowed like `ForwardLit`).
+    Transparent,
     /// Fullscreen tonemap: samples the linear HDR scene transient and writes the
     /// LDR surface. No vertex buffer (the triangle is generated in the shader), no
     /// depth, no cull.
@@ -758,6 +763,82 @@ mod tests {
         let shadow_bytes = u64::from(1024u32 * 1024 * 4);
         assert_eq!(plan.transient_memory, hdr_bytes + shadow_bytes);
         assert_eq!(plan.naive_memory, plan.transient_memory);
+    }
+
+    #[test]
+    fn full_chain_derives_shadow_pbr_transparent_tonemap() {
+        // shadow → PBR(opaque, writes hdr) → transparent(reads+writes hdr) →
+        // tonemap(reads hdr, writes surface), declared scrambled.
+        let mut g = RenderGraph::new();
+        let shadow = g.transient(ResourceDesc {
+            name: "shadow-map",
+            format: TextureFormat::Depth32Float,
+            size: SizeSpec::Fixed {
+                width: 512,
+                height: 512,
+            },
+            kind: ResourceKind::Depth,
+        });
+        let hdr = g.transient(ResourceDesc {
+            name: "scene-hdr",
+            format: TextureFormat::Rgba16Float,
+            size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+            kind: ResourceKind::Color,
+        });
+        g.add_pass(PassDesc {
+            name: "tonemap",
+            kind: PassKind::Tonemap,
+            reads: vec![hdr],
+            color: Some(ColorWrite {
+                target: g.surface(),
+                clear: Some(Color::BLACK),
+            }),
+            depth: None,
+        });
+        g.add_pass(PassDesc {
+            name: "transparent",
+            kind: PassKind::Transparent,
+            reads: vec![hdr],
+            color: Some(ColorWrite {
+                target: hdr,
+                clear: None,
+            }),
+            depth: Some(DepthWrite {
+                target: g.primary_depth(),
+                clear: None,
+                write: false,
+            }),
+        });
+        g.add_pass(PassDesc {
+            name: "pbr",
+            kind: PassKind::ForwardPbr,
+            reads: vec![shadow],
+            color: Some(ColorWrite {
+                target: hdr,
+                clear: Some(Color::BLACK),
+            }),
+            depth: Some(DepthWrite {
+                target: g.primary_depth(),
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        g.add_pass(PassDesc {
+            name: "shadow",
+            kind: PassKind::ShadowDepth,
+            reads: Vec::new(),
+            color: None,
+            depth: Some(DepthWrite {
+                target: shadow,
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        let plan = g.plan(SIZE).unwrap();
+        // shadow(3) → pbr(2) → transparent(1) → tonemap(0): the transparent pass
+        // both writes and reads hdr, so it orders after the pbr writer and before
+        // the tonemap reader.
+        assert_eq!(plan.order, vec![3, 2, 1, 0]);
     }
 
     #[test]

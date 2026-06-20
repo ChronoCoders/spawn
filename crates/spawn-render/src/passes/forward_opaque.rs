@@ -16,13 +16,17 @@ use crate::renderer::Renderer;
 
 /// The scene to render: one active camera, optional lighting (required by the
 /// shadow, lit, and PBR passes), the caller-ordered unlit/lit draws, the PBR
-/// draws (consumed by the `ForwardPbr` pass), and optional overlay data (the
-/// `spawn_ui` draw list + editor lines, consumed by the `Overlay2D` pass).
+/// draws (consumed by the `ForwardPbr` pass), the transparent draws (consumed by
+/// the `Transparent` pass), and optional overlay data (the `spawn_ui` draw list +
+/// editor lines, consumed by the `Overlay2D` pass).
 pub struct RenderScene<'a> {
     pub camera: &'a Camera,
     pub lighting: Option<&'a Lighting>,
     pub draws: &'a [DrawItem<'a>],
     pub pbr_draws: &'a [PbrDrawItem<'a>],
+    /// Alpha-blended draws shaded by the `Transparent` pass, sorted back-to-front
+    /// each frame. Distinct from the opaque `draws`; they do not cast shadows.
+    pub transparent: &'a [DrawItem<'a>],
     pub overlay: Option<Overlay<'a>>,
 }
 
