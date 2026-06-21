@@ -79,6 +79,11 @@ pub enum RenderError {
     InstanceBufferOverflow {
         context: &'static str,
     },
+    /// A post-processing chain is misconfigured (e.g. bloom enabled with zero
+    /// iterations, or a non-finite exposure / threshold).
+    PostConfigInvalid {
+        context: &'static str,
+    },
 }
 
 impl std::fmt::Display for RenderError {
@@ -127,6 +132,9 @@ impl std::fmt::Display for RenderError {
             Self::AnimationInvalid { context } => write!(f, "invalid animation clip: {context}"),
             Self::InstanceBufferOverflow { context } => {
                 write!(f, "instance/joint buffer overflow: {context}")
+            }
+            Self::PostConfigInvalid { context } => {
+                write!(f, "invalid post-processing config: {context}")
             }
         }
     }

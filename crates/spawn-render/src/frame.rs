@@ -341,9 +341,13 @@ impl FrameContext<'_, '_> {
                         }
                     }
                 }
-                PassKind::Tonemap => {
+                PassKind::BloomBright
+                | PassKind::BloomBlur
+                | PassKind::BloomComposite
+                | PassKind::Tonemap
+                | PassKind::Fxaa => {
                     let color = pass.color.ok_or(RenderError::InvalidArgument {
-                        context: "tonemap pass needs a color target",
+                        context: "post pass needs a color target",
                     })?;
                     let color_view: &wgpu::TextureView = if graph.is_surface(color.target) {
                         &self.color_view
@@ -357,15 +361,23 @@ impl FrameContext<'_, '_> {
                     };
                     let input_bind_group =
                         graph
-                            .tonemap_bind_group()
+                            .fullscreen_binding(pass_idx)
                             .ok_or(RenderError::InvalidArgument {
-                                context: "tonemap pass requires a compiled input bind group",
+                                context: "post pass requires a compiled input bind group",
                             })?;
-                    post::record_tonemap(
+                    let pipeline_key = match pass.kind {
+                        PassKind::BloomBright => self.renderer.bloom_bright_pipeline_key(),
+                        PassKind::BloomBlur => self.renderer.bloom_blur_pipeline_key(),
+                        PassKind::BloomComposite => self.renderer.bloom_composite_pipeline_key(),
+                        PassKind::Fxaa => self.renderer.fxaa_pipeline_key(),
+                        _ => self.renderer.tonemap_pipeline_key(),
+                    };
+                    post::record_fullscreen(
                         self.renderer,
                         encoder,
                         color_view,
                         color.clear,
+                        pipeline_key,
                         input_bind_group,
                     )?;
                 }

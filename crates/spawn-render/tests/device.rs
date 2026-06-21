@@ -1430,6 +1430,158 @@ fn skinned_opaque_graph_executes() {
     frame.end_frame().expect("end");
 }
 
+/// GPU instance required: compiles a full PBR + post-processing graph (shadow →
+/// PBR into HDR → bloom bright/blur/composite → tonemap → FXAA → surface) via
+/// `PostChain::build` and executes it. Exercises every fullscreen post pipeline,
+/// the half-res bloom transients, the 2-input composite, and the derived ordering
+/// of the whole chain with no wgpu validation errors.
+#[test]
+fn post_chain_executes() {
+    let Some((mut renderer, _guard)) = try_renderer() else {
+        eprintln!("device.rs: no adapter/surface available; skipping (spec §13 gate)");
+        return;
+    };
+
+    use spawn_asset::AssetId;
+    use spawn_render::{
+        BloomConfig, CompareFn, CullMode, Lighting, Mesh, PbrDrawItem, PbrMaps, PbrMaterial,
+        PbrMaterialUniform, PostChain, RenderStateKey, ResourceDesc, ResourceKind, ShaderHandle,
+        SizeSpec, TonemapConfig, Topology, Vertex,
+    };
+
+    let placeholder = ShaderHandle::from_id(AssetId::from_raw(18));
+    let material = PbrMaterial::new(
+        &renderer,
+        placeholder,
+        PbrMaterialUniform::default(),
+        PbrMaps::default(),
+        RenderStateKey {
+            color_format: renderer.hdr_format(),
+            depth_format: renderer.depth_format(),
+            depth_compare: CompareFn::Less,
+            depth_write: true,
+            cull: CullMode::Back,
+            topology: Topology::TriangleList,
+        },
+    )
+    .expect("pbr material");
+    let n = [0.0, 1.0, 0.0];
+    let verts = [
+        Vertex {
+            position: [-1.0, 0.0, -1.0],
+            normal: n,
+            uv: [0.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0, -1.0],
+            normal: n,
+            uv: [1.0, 0.0],
+        },
+        Vertex {
+            position: [1.0, 0.0, 1.0],
+            normal: n,
+            uv: [1.0, 1.0],
+        },
+        Vertex {
+            position: [-1.0, 0.0, 1.0],
+            normal: n,
+            uv: [0.0, 1.0],
+        },
+    ];
+    let mesh = Mesh::new(renderer.device(), &verts, &[0, 1, 2, 0, 2, 3]).expect("mesh");
+
+    let mut g = RenderGraph::new();
+    let depth = g.primary_depth();
+    let shadow_map = g.transient(ResourceDesc {
+        name: "shadow-map",
+        format: renderer.depth_format().to_wgpu(),
+        size: SizeSpec::Fixed {
+            width: 1024,
+            height: 1024,
+        },
+        kind: ResourceKind::Depth,
+    });
+    let hdr = g.transient(ResourceDesc {
+        name: "scene-hdr",
+        format: renderer.hdr_format(),
+        size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+        kind: ResourceKind::Color,
+    });
+    g.add_pass(PassDesc {
+        name: "shadow",
+        kind: PassKind::ShadowDepth,
+        reads: Vec::new(),
+        color: None,
+        depth: Some(DepthWrite {
+            target: shadow_map,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    g.add_pass(PassDesc {
+        name: "pbr",
+        kind: PassKind::ForwardPbr,
+        reads: vec![shadow_map],
+        color: Some(ColorWrite {
+            target: hdr,
+            clear: Some(Color::new(0.0, 0.0, 0.0, 1.0)),
+        }),
+        depth: Some(DepthWrite {
+            target: depth,
+            clear: Some(1.0),
+            write: true,
+        }),
+    });
+    let chain = PostChain {
+        bloom: Some(BloomConfig::default()),
+        tonemap: TonemapConfig::default(),
+        fxaa: true,
+    };
+    chain
+        .build(
+            &mut g,
+            hdr,
+            renderer.hdr_format(),
+            renderer.surface_format(),
+            renderer.size(),
+        )
+        .expect("post chain build");
+    let compiled = g.compile(&renderer).expect("compile post chain graph");
+
+    let camera = Camera::new(spawn_core::Mat4::IDENTITY, spawn_core::Mat4::IDENTITY);
+    let lighting = Lighting::default();
+    let pbr_draws = [PbrDrawItem {
+        mesh: &mesh,
+        material: &material,
+        model: spawn_core::Mat4::IDENTITY,
+    }];
+    let scene = RenderScene {
+        camera: &camera,
+        lighting: Some(&lighting),
+        draws: &[],
+        pbr_draws: &pbr_draws,
+        transparent: &[],
+        instances: &[],
+        pbr_instances: &[],
+        skinned: &[],
+        pbr_skinned: &[],
+        overlay: None,
+    };
+
+    let mut frame = match renderer.begin_frame() {
+        Ok(frame) => frame,
+        Err(RenderError::Surface | RenderError::SurfaceTimeout) => {
+            eprintln!("device.rs: surface not presentable on this host; skipping (spec §13 gate)");
+            return;
+        }
+        Err(e) => panic!("begin_frame: {e}"),
+    };
+    frame
+        .execute(&compiled, &scene)
+        .expect("execute post chain graph");
+    frame.end_frame().expect("end");
+}
+
 /// GPU instance required: compiles a base-clear + `Overlay2D` graph and executes
 /// it with a `spawn_ui` draw list (a background panel and a text label) plus a
 /// world-space line, exercising the UI quad pipeline, the glyph atlas text path,

@@ -84,15 +84,44 @@ pub enum PassKind {
     /// with depth-write off, drawn back-to-front. Reads the HDR color + scene
     /// depth, writes the HDR color (lit + shadowed like `ForwardLit`).
     Transparent,
-    /// Fullscreen tonemap: samples the linear HDR scene transient and writes the
-    /// LDR surface. No vertex buffer (the triangle is generated in the shader), no
-    /// depth, no cull.
+    /// Fullscreen bloom bright-pass: samples the HDR scene and writes the
+    /// above-threshold portion into a half-res HDR transient.
+    BloomBright,
+    /// Fullscreen separable Gaussian blur step (direction in the post-uniform),
+    /// ping-ponging between two half-res HDR transients.
+    BloomBlur,
+    /// Fullscreen bloom composite: samples the scene HDR and the blurred bloom
+    /// (two inputs) and writes `scene + bloom·intensity` into a fresh HDR transient
+    /// (two inputs avoid a read/write cycle on the scene).
+    BloomComposite,
+    /// Fullscreen tonemap: samples the linear HDR scene transient, applies exposure
+    /// and the configured operator (ACES/Reinhard), and writes LDR. No vertex
+    /// buffer (the triangle is generated in the shader), no depth, no cull.
     Tonemap,
+    /// Fullscreen FXAA: luma-based edge antialiasing over the LDR result, writing
+    /// the swapchain surface.
+    Fxaa,
     /// 2D overlay: rasterizes a `spawn_ui` draw list (rects, borders, text,
     /// scissors) plus editor line geometry (gizmos, selection) onto the surface
     /// after the lit scene. No depth; alpha-blended; loads (composites over) the
     /// existing color.
     Overlay2D,
+}
+
+impl PassKind {
+    /// Whether this is a fullscreen post pass: it samples its input transient(s)
+    /// via a fullscreen triangle (no vertex buffer, no depth) and carries a
+    /// post-uniform. Its bind group is built at compile/resize.
+    pub(crate) fn is_fullscreen(self) -> bool {
+        matches!(
+            self,
+            PassKind::BloomBright
+                | PassKind::BloomBlur
+                | PassKind::BloomComposite
+                | PassKind::Tonemap
+                | PassKind::Fxaa
+        )
+    }
 }
 
 /// A color attachment a pass writes.
@@ -132,6 +161,9 @@ enum ResourceEntry {
 pub struct RenderGraph {
     resources: Vec<ResourceEntry>,
     passes: Vec<PassDesc>,
+    /// Parallel to `passes`: the post-uniform data (`[f32; 4]`) for a fullscreen
+    /// post pass, or `None` for a non-post pass. Set via [`RenderGraph::add_post_pass`].
+    post_params: Vec<Option<[f32; 4]>>,
 }
 
 impl Default for RenderGraph {
@@ -146,6 +178,7 @@ impl RenderGraph {
         Self {
             resources: vec![ResourceEntry::Surface, ResourceEntry::PrimaryDepth],
             passes: Vec::new(),
+            post_params: Vec::new(),
         }
     }
 
@@ -169,6 +202,15 @@ impl RenderGraph {
     /// Appends a pass in declaration order.
     pub fn add_pass(&mut self, desc: PassDesc) -> &mut Self {
         self.passes.push(desc);
+        self.post_params.push(None);
+        self
+    }
+
+    /// Appends a fullscreen post pass with its post-uniform data (`[f32; 4]`),
+    /// consumed at compile to build the pass's bind group.
+    pub fn add_post_pass(&mut self, desc: PassDesc, params: [f32; 4]) -> &mut Self {
+        self.passes.push(desc);
+        self.post_params.push(Some(params));
         self
     }
 
@@ -308,22 +350,61 @@ impl RenderGraph {
             .and_then(|p| p.depth)
             .and_then(|d| resource_pool.get(d.target.index()).copied().flatten())
             .map(|region| renderer.create_light_bind_group(&pool[region].view));
-        // The tonemap pass samples the HDR scene transient it reads. Its group-0
-        // bind group is built here (compile/resize), never per frame.
-        let tonemap_bind_group = self
-            .passes
-            .iter()
-            .find(|p| p.kind == PassKind::Tonemap)
-            .and_then(|p| p.reads.first().copied())
-            .and_then(|id| resource_pool.get(id.index()).copied().flatten())
-            .map(|region| renderer.create_fullscreen_bind_group(&pool[region].view));
+        // Each fullscreen post pass samples its first read transient. Its group-0
+        // bind group (input texture + sampler + a post-uniform from `post_params`)
+        // is built here (compile/resize), never per frame.
+        let mut fullscreen: Vec<Option<wgpu::BindGroup>> = Vec::with_capacity(self.passes.len());
+        for (idx, pass) in self.passes.iter().enumerate() {
+            if !pass.kind.is_fullscreen() {
+                fullscreen.push(None);
+                continue;
+            }
+            // A tonemap pass declared via `add_pass` (no explicit params) defaults
+            // to exposure 1 + Reinhard, so the minimal PBR path stays correct;
+            // richer chains use `add_post_pass`.
+            let params = self
+                .post_params
+                .get(idx)
+                .copied()
+                .flatten()
+                .unwrap_or(match pass.kind {
+                    PassKind::Tonemap => [1.0, 0.0, 0.0, 0.0],
+                    _ => [0.0; 4],
+                });
+            let region_view = |id: ResourceId| -> Option<&wgpu::TextureView> {
+                resource_pool
+                    .get(id.index())
+                    .copied()
+                    .flatten()
+                    .map(|region| &pool[region].view)
+            };
+            // The bloom composite samples two inputs (scene HDR + blurred bloom);
+            // every other fullscreen pass samples one.
+            let binding = if pass.kind == PassKind::BloomComposite {
+                match (
+                    pass.reads.first().and_then(|&id| region_view(id)),
+                    pass.reads.get(1).and_then(|&id| region_view(id)),
+                ) {
+                    (Some(scene), Some(bloom)) => {
+                        Some(renderer.create_fullscreen2_bind_group(scene, bloom, params))
+                    }
+                    _ => None,
+                }
+            } else {
+                pass.reads
+                    .first()
+                    .and_then(|&id| region_view(id))
+                    .map(|view| renderer.create_fullscreen_bind_group(view, params))
+            };
+            fullscreen.push(binding);
+        }
         Ok(CompiledGraph {
             order: plan.order.clone(),
             passes: self.passes.clone(),
             pool,
             resource_pool,
             light_bind_group,
-            tonemap_bind_group,
+            fullscreen,
             plan,
             size,
         })
@@ -461,7 +542,7 @@ pub struct CompiledGraph {
     pool: Vec<PoolTexture>,
     resource_pool: Vec<Option<usize>>,
     light_bind_group: Option<wgpu::BindGroup>,
-    tonemap_bind_group: Option<wgpu::BindGroup>,
+    fullscreen: Vec<Option<wgpu::BindGroup>>,
     plan: GraphPlan,
     size: SurfaceSize,
 }
@@ -495,11 +576,11 @@ impl CompiledGraph {
         self.light_bind_group.as_ref()
     }
 
-    /// The tonemap pass's group-0 bind group (sampling the HDR scene transient),
-    /// present when the graph has a tonemap pass. Built at compile/resize and
-    /// reused every frame.
-    pub(crate) fn tonemap_bind_group(&self) -> Option<&wgpu::BindGroup> {
-        self.tonemap_bind_group.as_ref()
+    /// The group-0 bind group for the fullscreen post pass at `pass_index`
+    /// (sampling its input transient + its post-uniform), present for fullscreen
+    /// passes. Built at compile/resize and reused every frame.
+    pub(crate) fn fullscreen_binding(&self, pass_index: usize) -> Option<&wgpu::BindGroup> {
+        self.fullscreen.get(pass_index).and_then(|b| b.as_ref())
     }
 
     /// Re-sizes surface-relative transients and re-derives the aliasing plan.
@@ -839,6 +920,52 @@ mod tests {
         // both writes and reads hdr, so it orders after the pbr writer and before
         // the tonemap reader.
         assert_eq!(plan.order, vec![3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn post_chain_builds_an_acyclic_derivable_graph() {
+        use crate::passes::post::{BloomConfig, PostChain, TonemapConfig};
+        let mut g = RenderGraph::new();
+        let hdr = g.transient(ResourceDesc {
+            name: "scene-hdr",
+            format: TextureFormat::Rgba16Float,
+            size: SizeSpec::SurfaceRelative { num: 1, den: 1 },
+            kind: ResourceKind::Color,
+        });
+        // A producer pass writes the HDR scene (the post chain reads it).
+        g.add_pass(PassDesc {
+            name: "scene",
+            kind: PassKind::ForwardPbr,
+            reads: Vec::new(),
+            color: Some(ColorWrite {
+                target: hdr,
+                clear: Some(Color::BLACK),
+            }),
+            depth: Some(DepthWrite {
+                target: g.primary_depth(),
+                clear: Some(1.0),
+                write: true,
+            }),
+        });
+        let chain = PostChain {
+            bloom: Some(BloomConfig::default()),
+            tonemap: TonemapConfig::default(),
+            fxaa: true,
+        };
+        chain
+            .build(
+                &mut g,
+                hdr,
+                TextureFormat::Rgba16Float,
+                TextureFormat::Rgba8UnormSrgb,
+                SIZE,
+            )
+            .expect("post chain builds");
+        // The whole chain derives to a valid acyclic order ending at the surface.
+        let plan = g.plan(SIZE).expect("post chain derives");
+        assert_eq!(plan.order.len(), g.passes.len());
+        // bloom (bright + 3×2 blur + composite) + tonemap + fxaa + scene = 11.
+        assert_eq!(plan.order.len(), 11);
     }
 
     #[test]

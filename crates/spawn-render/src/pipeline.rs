@@ -161,9 +161,12 @@ pub struct BindGroupLayouts {
     /// metallic-roughness, normal, emissive, occlusion) at bindings 1–10. Absent
     /// maps bind the renderer's typed fallbacks so the layout is always satisfied.
     pub pbr_material: wgpu::BindGroupLayout,
-    /// Group 0 of a fullscreen post pass (tonemap): a float input texture at
-    /// binding 0 and a filtering sampler at binding 1.
+    /// Group 0 of a single-input fullscreen post pass: a float input texture at
+    /// binding 0, a filtering sampler at binding 1, and a post-uniform at binding 2.
     pub fullscreen: wgpu::BindGroupLayout,
+    /// Group 0 of a two-input fullscreen post pass (bloom composite: scene + bloom):
+    /// float textures at bindings 0 and 1, a sampler at 2, and a post-uniform at 3.
+    pub fullscreen2: wgpu::BindGroupLayout,
     /// Per-instance storage group appended to an instanced pipeline's layout: a
     /// single read-only `array<InstanceData>` at binding 0, indexed in the vertex
     /// shader by `@builtin(instance_index)` (the model is read in the vertex stage,
@@ -333,6 +336,16 @@ impl BindGroupLayouts {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
             ],
         });
         let instance = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -349,6 +362,47 @@ impl BindGroupLayouts {
                 },
                 count: None,
             }],
+        });
+        let fullscreen2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("spawn-fullscreen2-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
+                },
+            ],
         });
         let joint = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spawn-joint-bgl"),
@@ -390,6 +444,7 @@ impl BindGroupLayouts {
             light,
             pbr_material,
             fullscreen,
+            fullscreen2,
             instance,
             joint,
             overlay_texture,
@@ -455,7 +510,11 @@ impl PipelineCache {
                     &[&layouts.camera, &layouts.material, &layouts.light]
                 }
                 PassKind::ForwardPbr => &[&layouts.camera, &layouts.pbr_material, &layouts.light],
-                PassKind::Tonemap => &[&layouts.fullscreen],
+                PassKind::Tonemap
+                | PassKind::BloomBright
+                | PassKind::BloomBlur
+                | PassKind::Fxaa => &[&layouts.fullscreen],
+                PassKind::BloomComposite => &[&layouts.fullscreen2],
                 PassKind::ShadowDepth => &[&layouts.camera],
                 PassKind::Overlay2D => match key.vertex_layout {
                     VertexLayoutId::UiQuad => &[&layouts.overlay_texture],
@@ -488,7 +547,12 @@ impl PipelineCache {
             // fullscreen resolve: both run without depth. The 3D passes are opaque
             // with depth.
             let depth_stencil = match key.pass {
-                PassKind::Overlay2D | PassKind::Tonemap => None,
+                PassKind::Overlay2D
+                | PassKind::Tonemap
+                | PassKind::BloomBright
+                | PassKind::BloomBlur
+                | PassKind::BloomComposite
+                | PassKind::Fxaa => None,
                 _ => Some(wgpu::DepthStencilState {
                     format: key.render_state.depth_format.to_wgpu(),
                     depth_write_enabled: key.render_state.depth_write,
@@ -530,6 +594,10 @@ impl PipelineCache {
                 | PassKind::ForwardPbr
                 | PassKind::Transparent
                 | PassKind::Tonemap
+                | PassKind::BloomBright
+                | PassKind::BloomBlur
+                | PassKind::BloomComposite
+                | PassKind::Fxaa
                 | PassKind::Overlay2D => Some(wgpu::FragmentState {
                     module,
                     entry_point: "fs_main",
@@ -546,9 +614,10 @@ impl PipelineCache {
                 VertexLayoutId::UiQuad => UiVertex::layout(),
                 VertexLayoutId::OverlayLine => LineVertex::layout(),
             }];
-            let vertex_buffers: &[wgpu::VertexBufferLayout] = match key.pass {
-                PassKind::Tonemap => &[],
-                _ => &mesh_buffer,
+            let vertex_buffers: &[wgpu::VertexBufferLayout] = if key.pass.is_fullscreen() {
+                &[]
+            } else {
+                &mesh_buffer
             };
 
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

@@ -22,8 +22,9 @@ use crate::pipeline::{
     VertexLayoutId,
 };
 use crate::shaders::{
-    INSTANCED_OPAQUE_WGSL, INSTANCED_PBR_WGSL, INSTANCED_SHADOW_WGSL, LIT_WGSL, PBR_WGSL,
-    SHADOW_WGSL, SKINNED_OPAQUE_WGSL, SKINNED_PBR_WGSL, SKINNED_SHADOW_WGSL, TONEMAP_WGSL,
+    BLOOM_BLUR_WGSL, BLOOM_BRIGHT_WGSL, BLOOM_COMPOSITE_WGSL, FXAA_WGSL, INSTANCED_OPAQUE_WGSL,
+    INSTANCED_PBR_WGSL, INSTANCED_SHADOW_WGSL, LIT_WGSL, PBR_WGSL, SHADOW_WGSL,
+    SKINNED_OPAQUE_WGSL, SKINNED_PBR_WGSL, SKINNED_SHADOW_WGSL, TONEMAP_WGSL,
 };
 use crate::skeleton::GpuJoint;
 use crate::texture::{SamplerConfig, Texture};
@@ -89,6 +90,10 @@ pub struct Renderer<'w> {
     shadow_pipeline_key: PipelineKey,
     pbr_pipeline_key: PipelineKey,
     tonemap_pipeline_key: PipelineKey,
+    bloom_bright_pipeline_key: PipelineKey,
+    bloom_blur_pipeline_key: PipelineKey,
+    bloom_composite_pipeline_key: PipelineKey,
+    fxaa_pipeline_key: PipelineKey,
     transparent_pipeline_key: PipelineKey,
     pub(crate) transparent_scratch: Vec<(f32, u32)>,
     instance_buffer: wgpu::Buffer,
@@ -382,6 +387,57 @@ impl<'w> Renderer<'w> {
             pass: PassKind::Tonemap,
             instanced: false,
         };
+        // Bloom + FXAA fullscreen built-ins: bright-pass and blur and composite
+        // write the HDR scene/bloom transients; FXAA writes the LDR surface. All
+        // share the fullscreen layout (input texture + sampler + post-uniform) and
+        // are built once here.
+        let bloom_bright_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_BLOOM_BRIGHT_SHADER_ID));
+        let bloom_blur_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_BLOOM_BLUR_SHADER_ID));
+        let bloom_composite_shader =
+            ShaderHandle::from_id(AssetId::from_raw(BUILTIN_BLOOM_COMPOSITE_SHADER_ID));
+        let fxaa_shader = ShaderHandle::from_id(AssetId::from_raw(BUILTIN_FXAA_SHADER_ID));
+        shaders.load(&device, bloom_bright_shader, BLOOM_BRIGHT_WGSL)?;
+        shaders.load(&device, bloom_blur_shader, BLOOM_BLUR_WGSL)?;
+        shaders.load(&device, bloom_composite_shader, BLOOM_COMPOSITE_WGSL)?;
+        shaders.load(&device, fxaa_shader, FXAA_WGSL)?;
+        let fullscreen_state = |color: TextureFormat| RenderStateKey {
+            color_format: color,
+            depth_format: config.depth_format,
+            depth_compare: CompareFn::Always,
+            depth_write: false,
+            cull: CullMode::None,
+            topology: Topology::TriangleList,
+        };
+        let bloom_bright_pipeline_key = PipelineKey {
+            shader: bloom_bright_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: fullscreen_state(HDR_FORMAT),
+            pass: PassKind::BloomBright,
+            instanced: false,
+        };
+        let bloom_blur_pipeline_key = PipelineKey {
+            shader: bloom_blur_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: fullscreen_state(HDR_FORMAT),
+            pass: PassKind::BloomBlur,
+            instanced: false,
+        };
+        let bloom_composite_pipeline_key = PipelineKey {
+            shader: bloom_composite_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: fullscreen_state(HDR_FORMAT),
+            pass: PassKind::BloomComposite,
+            instanced: false,
+        };
+        let fxaa_pipeline_key = PipelineKey {
+            shader: fxaa_shader,
+            vertex_layout: VertexLayoutId::PositionNormalUv,
+            render_state: fullscreen_state(surface_format),
+            pass: PassKind::Fxaa,
+            instanced: false,
+        };
         // The transparent pass reuses the lit shader (Lambert + ambient + PCF
         // shadow) but blends into the HDR scene with depth-write off, so it is a
         // distinct cache entry from `ForwardLit`.
@@ -401,6 +457,10 @@ impl<'w> Renderer<'w> {
         };
         cache.get_or_create(&device, &layouts, pbr_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, tonemap_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, bloom_bright_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, bloom_blur_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, bloom_composite_pipeline_key, &shaders)?;
+        cache.get_or_create(&device, &layouts, fxaa_pipeline_key, &shaders)?;
         cache.get_or_create(&device, &layouts, transparent_pipeline_key, &shaders)?;
 
         // Instanced built-ins: the opaque (unlit) and PBR forward variants plus the
@@ -635,6 +695,10 @@ impl<'w> Renderer<'w> {
             shadow_pipeline_key,
             pbr_pipeline_key,
             tonemap_pipeline_key,
+            bloom_bright_pipeline_key,
+            bloom_blur_pipeline_key,
+            bloom_composite_pipeline_key,
+            fxaa_pipeline_key,
             transparent_pipeline_key,
             transparent_scratch: Vec::new(),
             instance_buffer,
@@ -921,6 +985,23 @@ impl<'w> Renderer<'w> {
         self.tonemap_pipeline_key
     }
 
+    /// Cache keys of the built-in fullscreen bloom and FXAA pipelines.
+    pub(crate) fn bloom_bright_pipeline_key(&self) -> PipelineKey {
+        self.bloom_bright_pipeline_key
+    }
+
+    pub(crate) fn bloom_blur_pipeline_key(&self) -> PipelineKey {
+        self.bloom_blur_pipeline_key
+    }
+
+    pub(crate) fn bloom_composite_pipeline_key(&self) -> PipelineKey {
+        self.bloom_composite_pipeline_key
+    }
+
+    pub(crate) fn fxaa_pipeline_key(&self) -> PipelineKey {
+        self.fxaa_pipeline_key
+    }
+
     /// The cache key of the built-in transparent pipeline (lit shading, alpha
     /// blend, depth-test-no-write; used by the `Transparent` pass for every draw).
     pub(crate) fn transparent_pipeline_key(&self) -> PipelineKey {
@@ -1040,13 +1121,24 @@ impl<'w> Renderer<'w> {
             .write_buffer(&self.joint_buffer, base, bytemuck::cast_slice(data));
     }
 
-    /// Builds a fullscreen-pass group-0 bind group sampling `input_view` (a scene
-    /// transient) with the renderer's clamp/linear sampler. Built at graph
-    /// compile/resize, never per frame.
+    /// Builds a fullscreen post-pass group-0 bind group: `input_view` sampled with
+    /// the renderer's clamp/linear sampler, plus a post-uniform buffer holding
+    /// `params` (operator/exposure/threshold/blur-direction, pass-dependent). Built
+    /// at graph compile/resize, never per frame. The created uniform buffer is kept
+    /// alive by the returned bind group.
     pub(crate) fn create_fullscreen_bind_group(
         &self,
         input_view: &wgpu::TextureView,
+        params: [f32; 4],
     ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+        let uniform = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("spawn-post-uniform"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("spawn-fullscreen-bg"),
             layout: &self.layouts.fullscreen,
@@ -1058,6 +1150,51 @@ impl<'w> Renderer<'w> {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.fullscreen_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Builds a two-input fullscreen bind group (e.g. bloom composite: scene at
+    /// `view0`, bloom at `view1`) with the clamp/linear sampler and a post-uniform
+    /// holding `params`. Built at graph compile/resize, never per frame.
+    pub(crate) fn create_fullscreen2_bind_group(
+        &self,
+        view0: &wgpu::TextureView,
+        view1: &wgpu::TextureView,
+        params: [f32; 4],
+    ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+        let uniform = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("spawn-post-uniform"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spawn-fullscreen2-bg"),
+            layout: &self.layouts.fullscreen2,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view0),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(view1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.fullscreen_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform.as_entire_binding(),
                 },
             ],
         })
@@ -1120,6 +1257,10 @@ const BUILTIN_INSTANCED_PBR_SHADER_ID: u64 = u64::MAX - 8;
 const BUILTIN_SKINNED_OPAQUE_SHADER_ID: u64 = u64::MAX - 9;
 const BUILTIN_SKINNED_SHADOW_SHADER_ID: u64 = u64::MAX - 10;
 const BUILTIN_SKINNED_PBR_SHADER_ID: u64 = u64::MAX - 11;
+const BUILTIN_BLOOM_BRIGHT_SHADER_ID: u64 = u64::MAX - 12;
+const BUILTIN_BLOOM_BLUR_SHADER_ID: u64 = u64::MAX - 13;
+const BUILTIN_BLOOM_COMPOSITE_SHADER_ID: u64 = u64::MAX - 14;
+const BUILTIN_FXAA_SHADER_ID: u64 = u64::MAX - 15;
 
 /// Maximum joints per skinned draw: the fixed dynamic-offset window into the joint
 /// storage buffer. A draw whose skeleton exceeds this is rejected with

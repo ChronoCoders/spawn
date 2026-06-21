@@ -300,15 +300,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Minimal tonemap pass: a fullscreen triangle (positions generated from the
-/// vertex index, no vertex buffer) that samples the linear HDR scene transient
-/// and applies the Reinhard operator, writing the LDR sRGB surface (the sRGB
-/// target encodes the linear result on store). The post-processing phase replaces
-/// this with the configurable exposure/ACES chain; the operator is kept minimal
-/// here so the PBR path produces a presentable frame.
+/// Tonemap pass: a fullscreen triangle (positions generated from the vertex
+/// index, no vertex buffer) that samples the linear HDR scene transient, applies
+/// exposure (`post.data.x`) and either Reinhard (`post.data.y < 0.5`) or an
+/// ACES-fitted operator, and writes the LDR sRGB surface (the sRGB target encodes
+/// the linear result on store).
 pub(crate) const TONEMAP_WGSL: &str = r#"
+struct Post { data: vec4<f32> };
 @group(0) @binding(0) var hdr_tex: texture_2d<f32>;
 @group(0) @binding(1) var hdr_samp: sampler;
+@group(0) @binding(2) var<uniform> post: Post;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -325,10 +326,23 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
+fn aces(x: vec3<f32>) -> vec3<f32> {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let hdr = textureSample(hdr_tex, hdr_samp, in.uv).rgb;
-    let mapped = hdr / (hdr + vec3<f32>(1.0));
+    let exposure = post.data.x;
+    let hdr = textureSample(hdr_tex, hdr_samp, in.uv).rgb * exposure;
+    var mapped = hdr / (hdr + vec3<f32>(1.0));
+    if (post.data.y >= 0.5) {
+        mapped = aces(hdr);
+    }
     return vec4<f32>(mapped, 1.0);
 }
 "#;
@@ -920,5 +934,164 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let color = ambient + direct + emissive;
     return vec4<f32>(color, albedo.a);
+}
+"#;
+
+/// Bloom bright-pass: emits the above-threshold portion of the HDR scene with a
+/// soft knee (`post.data = [threshold, knee, _, _]`) into a half-res transient.
+pub(crate) const BLOOM_BRIGHT_WGSL: &str = r#"
+struct Post { data: vec4<f32> };
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_samp: sampler;
+@group(0) @binding(2) var<uniform> post: Post;
+
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u);
+    let y = f32(vi & 2u);
+    out.uv = vec2<f32>(x, y);
+    out.clip = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let c = textureSample(src_tex, src_samp, in.uv).rgb;
+    let threshold = post.data.x;
+    let knee = max(post.data.y, 1e-4);
+    let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let soft = clamp(l - threshold + knee, 0.0, 2.0 * knee);
+    let soft_contrib = soft * soft / (4.0 * knee);
+    let contrib = max(soft_contrib, l - threshold) / max(l, 1e-4);
+    return vec4<f32>(c * max(contrib, 0.0), 1.0);
+}
+"#;
+
+/// Separable Gaussian blur (9-tap): `post.data = [dir_x, dir_y, texel_x, texel_y]`
+/// gives the step direction (horizontal or vertical) scaled by the texel size.
+pub(crate) const BLOOM_BLUR_WGSL: &str = r#"
+struct Post { data: vec4<f32> };
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_samp: sampler;
+@group(0) @binding(2) var<uniform> post: Post;
+
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u);
+    let y = f32(vi & 2u);
+    out.uv = vec2<f32>(x, y);
+    out.clip = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let step = post.data.xy * post.data.zw;
+    let w0 = 0.227027;
+    let w = array<f32, 4>(0.1945946, 0.1216216, 0.054054, 0.016216);
+    var result = textureSample(src_tex, src_samp, in.uv).rgb * w0;
+    for (var i = 0; i < 4; i = i + 1) {
+        let o = step * f32(i + 1);
+        result = result + textureSample(src_tex, src_samp, in.uv + o).rgb * w[i];
+        result = result + textureSample(src_tex, src_samp, in.uv - o).rgb * w[i];
+    }
+    return vec4<f32>(result, 1.0);
+}
+"#;
+
+/// Bloom composite: combines the scene HDR (binding 0) with the blurred bloom
+/// (binding 1) scaled by intensity (`post.data.x`), writing scene + bloom·intensity
+/// into a fresh HDR transient. Two inputs avoids a read/write cycle on the scene.
+pub(crate) const BLOOM_COMPOSITE_WGSL: &str = r#"
+struct Post { data: vec4<f32> };
+@group(0) @binding(0) var scene_tex: texture_2d<f32>;
+@group(0) @binding(1) var bloom_tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var<uniform> post: Post;
+
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u);
+    let y = f32(vi & 2u);
+    out.uv = vec2<f32>(x, y);
+    out.clip = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let scene = textureSample(scene_tex, samp, in.uv).rgb;
+    let bloom = textureSample(bloom_tex, samp, in.uv).rgb;
+    return vec4<f32>(scene + bloom * post.data.x, 1.0);
+}
+"#;
+
+/// FXAA: luma-based edge antialiasing over the LDR result. `post.data = [texel_x,
+/// texel_y, _, _]`. A compact gather + directional blend along the luma gradient.
+pub(crate) const FXAA_WGSL: &str = r#"
+struct Post { data: vec4<f32> };
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_samp: sampler;
+@group(0) @binding(2) var<uniform> post: Post;
+
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u);
+    let y = f32(vi & 2u);
+    out.uv = vec2<f32>(x, y);
+    out.clip = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return out;
+}
+
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.299, 0.587, 0.114));
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let texel = post.data.xy;
+    let rgb_m = textureSample(src_tex, src_samp, in.uv).rgb;
+    let l_m = luma(rgb_m);
+    let l_nw = luma(textureSample(src_tex, src_samp, in.uv + vec2<f32>(-texel.x, -texel.y)).rgb);
+    let l_ne = luma(textureSample(src_tex, src_samp, in.uv + vec2<f32>(texel.x, -texel.y)).rgb);
+    let l_sw = luma(textureSample(src_tex, src_samp, in.uv + vec2<f32>(-texel.x, texel.y)).rgb);
+    let l_se = luma(textureSample(src_tex, src_samp, in.uv + vec2<f32>(texel.x, texel.y)).rgb);
+
+    let l_min = min(l_m, min(min(l_nw, l_ne), min(l_sw, l_se)));
+    let l_max = max(l_m, max(max(l_nw, l_ne), max(l_sw, l_se)));
+    let range = l_max - l_min;
+    if (range < max(0.0312, l_max * 0.125)) {
+        return vec4<f32>(rgb_m, 1.0);
+    }
+
+    var dir = vec2<f32>(
+        -((l_nw + l_ne) - (l_sw + l_se)),
+        (l_nw + l_sw) - (l_ne + l_se),
+    );
+    let reduce = max((l_nw + l_ne + l_sw + l_se) * 0.25 * 0.125, 1.0 / 128.0);
+    let dir_min = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * dir_min, vec2<f32>(-8.0), vec2<f32>(8.0)) * texel;
+
+    let rgb_a = 0.5 * (textureSample(src_tex, src_samp, in.uv + dir * (1.0 / 3.0 - 0.5)).rgb
+        + textureSample(src_tex, src_samp, in.uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    let rgb_b = rgb_a * 0.5 + 0.25 * (textureSample(src_tex, src_samp, in.uv + dir * -0.5).rgb
+        + textureSample(src_tex, src_samp, in.uv + dir * 0.5).rgb);
+    let l_b = luma(rgb_b);
+    if (l_b < l_min || l_b > l_max) {
+        return vec4<f32>(rgb_a, 1.0);
+    }
+    return vec4<f32>(rgb_b, 1.0);
 }
 "#;

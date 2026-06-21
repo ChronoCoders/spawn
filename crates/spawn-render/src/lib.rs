@@ -54,6 +54,7 @@ pub use passes::forward_opaque::{
     RenderScene, SkinnedDrawItem,
 };
 pub use passes::overlay::{FontRegistry, LineSegment, Overlay};
+pub use passes::post::{BloomConfig, PostChain, TonemapConfig, TonemapOperator};
 pub use pipeline::{
     BindGroupLayouts, PipelineCache, PipelineKey, RenderStateKey, ShaderStore, VertexLayoutId,
 };
