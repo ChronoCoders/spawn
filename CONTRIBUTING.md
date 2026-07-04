@@ -8,7 +8,7 @@ We are selective. This document exists to save your time and ours.
 
 ## Who we're looking for
 
-You have shipped production code in systems languages — C, C++, or Rust. Not tutorials. Not side projects that never ran in production. Code that had to work.
+You have shipped production code in systems languages: C, C++, or Rust. Not tutorials. Not side projects that never ran in production. Code that had to work.
 
 You have real experience in at least one of these domains:
 - Game engine architecture (ECS, rendering, physics, audio)
@@ -52,10 +52,10 @@ A PR without an approved spec will be closed.
 
 The same standards that apply to the core codebase apply to every contribution:
 
-- `cargo clippy --all-features --all-targets -D warnings` — clean
-- `cargo fmt --check` — clean
-- `cargo test --workspace` — all pass
-- `cargo deny check` — clean
+- `cargo clippy --all-features --all-targets -D warnings`: clean
+- `cargo fmt --check`: clean
+- `cargo test --workspace`: all pass
+- `cargo deny check`: clean
 - No `unwrap()` in production paths
 - No `unsafe` without a `SAFETY` comment
 - No dead code, no TODOs, no placeholder implementations

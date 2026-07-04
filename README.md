@@ -11,7 +11,7 @@
 
 Rust game engine with archetype ECS, wgpu rendering, Rapier physics, and Lua scripting.
 
-**Status:** v0.2.0 — Phase 2 complete. All 18 crates implement their core APIs against written specifications, with 851 tests across the workspace. Phase 2 added the engine integration loop, render-graph derivation with directional lighting and shadows, the visual editor, and server-authoritative netcode. Release notes: [v0.2.0 GitHub release](https://github.com/ChronoCoders/spawn/releases/tag/v0.2.0).
+**Status:** v0.2.0, Phase 2 complete. All 18 crates implement their core APIs against written specifications, with 851 tests across the workspace. Phase 2 added the engine integration loop, render-graph derivation with directional lighting and shadows, the visual editor, and server-authoritative netcode. Release notes: [v0.2.0 GitHub release](https://github.com/ChronoCoders/spawn/releases/tag/v0.2.0).
 
 ## Workspace
 
