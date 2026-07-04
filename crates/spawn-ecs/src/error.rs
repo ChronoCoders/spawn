@@ -70,6 +70,12 @@ pub enum EcsError {
         /// The child whose reparent was rejected.
         entity: Entity,
     },
+    /// A stage's `before`/`after` ordering constraints are contradictory (they
+    /// form a cycle), so no total order exists. Raised at [`build`](crate::Schedule::build).
+    ScheduleCycle {
+        /// Diagnostic context (the offending stage name).
+        context: &'static str,
+    },
 }
 
 impl fmt::Display for EcsError {
@@ -110,6 +116,7 @@ impl fmt::Display for EcsError {
                     entity.generation()
                 )
             }
+            Self::ScheduleCycle { context } => write!(f, "schedule ordering cycle in '{context}'"),
         }
     }
 }
@@ -150,6 +157,7 @@ mod tests {
             EcsError::HierarchyCycle {
                 entity: Entity::PLACEHOLDER,
             },
+            EcsError::ScheduleCycle { context: "s" },
         ];
         for v in &variants {
             assert!(!v.to_string().is_empty());

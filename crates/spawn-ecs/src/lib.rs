@@ -42,7 +42,7 @@ pub use reflect::{
     FieldDesc, FieldKind, FieldValue, Reflect, ReflectError, ReflectResult, ReflectedComponent,
 };
 pub use resource::{Res, ResMut, Resource, ResourceId};
-pub use schedule::{Schedule, Stage};
+pub use schedule::{RunCondition, Schedule, SetConfigurator, Stage, SystemConfigurator};
 pub use serialize::{serialize_entity, EntityMap, MapEntities, SerializeComponent, WireId};
 pub use system::{Access, ComponentMask, IntoSystem, System, SystemParam};
 pub use world::World;
