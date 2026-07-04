@@ -2468,6 +2468,7 @@ dependencies = [
  "spawn-asset",
  "spawn-audio",
  "spawn-core",
+ "spawn-debug",
  "spawn-ecs",
  "spawn-input",
  "spawn-physics",

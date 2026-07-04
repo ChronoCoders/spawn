@@ -186,6 +186,15 @@ impl App {
         self
     }
 
+    /// Installs the engine's default logger (a stderr sink at `Info`) if no logger
+    /// is initialized yet. Idempotent: a no-op when the application already called
+    /// `Logger::init`. Called automatically before assembly; also public so an app
+    /// can opt into it explicitly or skip it by initializing its own logger first.
+    pub fn init_default_logging(&self) -> &Self {
+        crate::observability::install_default_logging();
+        self
+    }
+
     /// Runs the windowed driver: creates the platform event loop and runs the
     /// full loop to a clean shutdown, returning when the loop exits.
     pub fn run(self) -> EngineResult<()> {

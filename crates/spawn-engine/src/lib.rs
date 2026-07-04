@@ -15,6 +15,7 @@ mod engine;
 mod error;
 mod frame;
 mod input;
+mod observability;
 mod render;
 mod time;
 mod ui;
@@ -35,6 +36,6 @@ pub use ui::DEFAULT_FONT;
 pub use spawn_input::{KeyCode, Keyboard, Mouse, MouseButton};
 pub use spawn_platform::WindowConfig;
 pub use spawn_render::{
-    DirectionalLight, Lighting, RenderResources, Renderer, ShadowConfig, SurfaceSize,
+    AdapterInfo, DirectionalLight, Lighting, RenderResources, Renderer, ShadowConfig, SurfaceSize,
 };
 pub use spawn_ui::{FontId, NodeId, Style, UiTree};

@@ -107,8 +107,11 @@ impl Engine {
             config,
         } = parts;
 
+        crate::observability::install_default_logging();
+
         let input = InputState::new()?;
         let audio = AudioEngine::new(AudioConfig::default())?;
+        crate::observability::log_startup(backend.adapter_info(), audio.backend_kind());
         let mut assets = AssetServer::new(AssetServerConfig {
             root: ".".into(),
             hot_reload: false,

@@ -13,9 +13,9 @@ use spawn_asset::AssetId;
 use spawn_core::{Color, Mat4};
 use spawn_platform::Window;
 use spawn_render::{
-    Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, Font, FontRegistry, Lighting, Overlay,
-    PassDesc, PassKind, RenderGraph, RenderResources, RenderScene, Renderer, RendererConfig,
-    ResourceDesc, ResourceKind, ShadowConfig, SizeSpec, SurfaceSize,
+    AdapterInfo, Camera, ColorWrite, CompiledGraph, DepthWrite, DrawItem, Font, FontRegistry,
+    Lighting, Overlay, PassDesc, PassKind, RenderGraph, RenderResources, RenderScene, Renderer,
+    RendererConfig, ResourceDesc, ResourceKind, ShadowConfig, SizeSpec, SurfaceSize,
 };
 use spawn_ui::{DrawList, UiTree};
 
@@ -79,6 +79,12 @@ pub trait RenderBackend {
     fn submit(&mut self, proxies: &RenderProxies, ui: Option<&mut UiTree>) -> EngineResult<()>;
     /// Reconfigures for a new surface size.
     fn resize(&mut self, size: SurfaceSize) -> EngineResult<()>;
+    /// The selected GPU adapter's identity for startup logging, or `None` when the
+    /// backend has no GPU (headless). Read once during assembly; defaults to
+    /// `None` so a GPU-free backend needs no override.
+    fn adapter_info(&self) -> Option<AdapterInfo> {
+        None
+    }
 }
 
 /// The engine-private double buffer. Two `RenderProxies` and an alternating
@@ -345,5 +351,9 @@ impl RenderBackend for WgpuBackend {
         self.renderer.resize(size)?;
         self.compiled.resize(&self.graph, &self.renderer)?;
         Ok(())
+    }
+
+    fn adapter_info(&self) -> Option<AdapterInfo> {
+        Some(self.renderer.adapter_info())
     }
 }
