@@ -39,6 +39,27 @@ const HDR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub trait HasWindowHandleSet: HasWindowHandle + HasDisplayHandle + Send + Sync {}
 impl<T: HasWindowHandle + HasDisplayHandle + Send + Sync> HasWindowHandleSet for T {}
 
+/// Identity of the selected GPU adapter, surfaced for startup logging. `backend`
+/// is a stable label (`"Vulkan"`, `"Metal"`, `"DX12"`, `"GL"`, `"BrowserWebGpu"`,
+/// or `"Unknown"`) rather than a `wgpu` enum, so downstream crates need not depend
+/// on `wgpu` to display it.
+#[derive(Debug, Clone)]
+pub struct AdapterInfo {
+    pub name: String,
+    pub backend: &'static str,
+}
+
+fn backend_label(backend: wgpu::Backend) -> &'static str {
+    match backend {
+        wgpu::Backend::Vulkan => "Vulkan",
+        wgpu::Backend::Metal => "Metal",
+        wgpu::Backend::Dx12 => "DX12",
+        wgpu::Backend::Gl => "GL",
+        wgpu::Backend::BrowserWebGpu => "BrowserWebGpu",
+        wgpu::Backend::Empty => "Unknown",
+    }
+}
+
 /// Renderer construction parameters.
 pub struct RendererConfig {
     pub power_preference: PowerPreference,
@@ -120,7 +141,7 @@ pub struct Renderer<'w> {
     pub(crate) surface_config: wgpu::SurfaceConfiguration,
     depth_format: DepthFormat,
     size: SurfaceSize,
-    _adapter: wgpu::Adapter,
+    adapter: wgpu::Adapter,
     _instance: wgpu::Instance,
 }
 
@@ -725,7 +746,7 @@ impl<'w> Renderer<'w> {
             surface_config,
             depth_format: config.depth_format,
             size,
-            _adapter: adapter,
+            adapter,
             _instance: instance,
         })
     }
@@ -740,6 +761,16 @@ impl<'w> Renderer<'w> {
 
     pub fn surface_format(&self) -> TextureFormat {
         self.surface_config.format
+    }
+
+    /// The selected GPU adapter's identity (name + backend label), for startup
+    /// logging. Reads the adapter chosen at construction; performs no GPU work.
+    pub fn adapter_info(&self) -> AdapterInfo {
+        let info = self.adapter.get_info();
+        AdapterInfo {
+            name: info.name,
+            backend: backend_label(info.backend),
+        }
     }
 
     pub fn depth_format(&self) -> DepthFormat {
@@ -1382,5 +1413,20 @@ impl<W: HasWindowHandleSet> HasDisplayHandle for OwnedWindow<W> {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         self.0.display_handle()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::backend_label;
+
+    #[test]
+    fn backend_label_maps_every_variant_to_a_stable_name() {
+        assert_eq!(backend_label(wgpu::Backend::Vulkan), "Vulkan");
+        assert_eq!(backend_label(wgpu::Backend::Metal), "Metal");
+        assert_eq!(backend_label(wgpu::Backend::Dx12), "DX12");
+        assert_eq!(backend_label(wgpu::Backend::Gl), "GL");
+        assert_eq!(backend_label(wgpu::Backend::BrowserWebGpu), "BrowserWebGpu");
+        assert_eq!(backend_label(wgpu::Backend::Empty), "Unknown");
     }
 }

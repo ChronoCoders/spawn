@@ -58,7 +58,7 @@ pub use passes::post::{BloomConfig, PostChain, TonemapConfig, TonemapOperator};
 pub use pipeline::{
     BindGroupLayouts, PipelineCache, PipelineKey, RenderStateKey, ShaderStore, VertexLayoutId,
 };
-pub use renderer::{HasWindowHandleSet, Renderer, RendererConfig};
+pub use renderer::{AdapterInfo, HasWindowHandleSet, Renderer, RendererConfig};
 pub use resources::RenderResources;
 pub use skeleton::{GpuJoint, Joint, Skeleton, ROOT_JOINT};
 pub use text::{Font, Glyph};
