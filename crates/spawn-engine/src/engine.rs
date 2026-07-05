@@ -1,16 +1,16 @@
 //! The [`Engine`] runtime and the frame pipeline.
 //!
 //! `Engine` owns the live world, the two schedules, the subsystem handles, the
-//! render-proxy store, and the frame clock. [`Engine::tick`] runs exactly one
-//! frame; the headless driver calls it directly and the windowed driver calls it
-//! from `redraw_requested`. Field declaration order is the teardown order
-//! (render backend → input → audio → asset server → world): the asset server's
-//! `Drop` joins its IO threads while the world (which may hold asset handles) is
-//! still alive.
+//! render executor (which owns the backend), and the frame clock. [`Engine::tick`]
+//! runs exactly one frame; the headless driver calls it directly and the windowed
+//! driver calls it from `redraw_requested`. Field declaration order is the
+//! teardown order (render executor → input → audio → asset server → world): the
+//! asset server's `Drop` joins its IO threads while the world (which may hold
+//! asset handles) is still alive.
 
 use std::time::Instant;
 
-use spawn_asset::{AssetServer, AssetServerConfig};
+use spawn_asset::{AssetServer, AssetServerConfig, ReloadEvent};
 use spawn_audio::{AudioConfig, AudioEngine};
 use spawn_ecs::{EcsResult, Schedule, Stage, World};
 use spawn_input::InputState;
@@ -22,7 +22,7 @@ use crate::audio::AudioCommands;
 use crate::config::EngineConfig;
 use crate::error::EngineResult;
 use crate::input::InputFrame;
-use crate::render::{RenderBackend, RenderProxies, RenderProxyStore};
+use crate::render::{InlineExecutor, RenderBackend, RenderExecutor, RenderProxies, RenderReport};
 use crate::time::Time;
 use crate::ui::{UiSetup, UiUpdate};
 use spawn_ui::{Style, UiTree};
@@ -63,7 +63,7 @@ pub(crate) struct EngineParts {
 
 /// The live engine runtime.
 pub struct Engine {
-    backend: Box<dyn RenderBackend>,
+    executor: Box<dyn RenderExecutor>,
     input: InputState,
     audio: AudioEngine,
     assets: AssetServer,
@@ -72,10 +72,10 @@ pub struct Engine {
     fixed_schedule: Schedule,
     fixed_hooks: Vec<FixedHook>,
     extracts: Vec<ExtractFn>,
-    render_reloads: Vec<crate::render::RenderReload>,
     ui: Option<UiTree>,
     ui_updates: Vec<UiUpdate>,
-    proxies: RenderProxyStore,
+    render_buffer: RenderProxies,
+    last_render_report: RenderReport,
     time: Time,
     config: EngineConfig,
     pending_events: Vec<PlatformEvent>,
@@ -162,8 +162,11 @@ impl Engine {
         }
         fixed_schedule.build(&world)?;
 
+        let executor: Box<dyn RenderExecutor> =
+            Box::new(InlineExecutor::new(backend, render_reloads));
+
         Ok(Self {
-            backend,
+            executor,
             input,
             audio,
             assets,
@@ -172,10 +175,10 @@ impl Engine {
             fixed_schedule,
             fixed_hooks,
             extracts,
-            render_reloads,
             ui,
             ui_updates,
-            proxies: RenderProxyStore::new(),
+            render_buffer: RenderProxies::default(),
+            last_render_report: RenderReport::default(),
             time,
             config,
             pending_events: Vec::new(),
@@ -206,16 +209,13 @@ impl Engine {
         }
 
         // 3. Asset pump (the single per-frame main-thread sync point): apply
-        // loads, surface the report and any in-place reloads for this frame, then
-        // rebuild GPU resources for reloaded assets before the frame's submit.
+        // loads, then surface the report and any in-place reloads for this frame.
+        // The render-reload hooks run in the executor's submit, just before the
+        // frame renders.
         let applied = self.assets.apply_loaded();
         let reloads = self.assets.drain_reload_events();
         if let Some(mut frame_assets) = self.world.get_resource_mut::<FrameAssets>() {
             frame_assets.applied = applied;
-        }
-        if !reloads.is_empty() && !self.render_reloads.is_empty() {
-            self.backend
-                .apply_render_reloads(&reloads, &mut self.render_reloads)?;
         }
         if let Some(mut reload_events) = self.world.get_resource_mut::<ReloadEvents>() {
             reload_events.refresh(reloads);
@@ -243,13 +243,12 @@ impl Engine {
         self.var_schedule.run_stages(&mut self.world)?;
         self.world.update_events();
 
-        // 6. Extract: write the back proxy buffer (the sync point).
-        {
-            let back = self.proxies.back_mut();
-            back.reset();
-            for extract in &mut self.extracts {
-                extract(&self.world, back);
-            }
+        // 6. Extract: fill an owned proxy buffer (the sync point). The buffer is
+        // taken from the engine and handed to the executor, which returns it empty.
+        let mut back = std::mem::take(&mut self.render_buffer);
+        back.reset();
+        for extract in &mut self.extracts {
+            extract(&self.world, &mut back);
         }
 
         // 7. UI: run the overlay updates against the live world. The tree is
@@ -261,11 +260,26 @@ impl Engine {
             }
         }
 
-        // 8. Publish per sync mode and render.
+        // 8. Publish the extracted buffer through the executor and render. The
+        // executor runs this frame's render-reload hooks, submits (inline today, a
+        // render thread later), and hands back the recycled buffer plus the frame
+        // report. A per-frame backend error is surfaced from tick here.
         let mode = self.config.sync_mode;
-        self.backend
-            .submit(self.proxies.read(mode), self.ui.as_mut())?;
-        self.proxies.advance(mode);
+        let reloads_guard = self.world.get_resource::<ReloadEvents>();
+        let reloads: &[ReloadEvent] = match &reloads_guard {
+            Some(events) => events.events(),
+            None => &[],
+        };
+        let (recycled, mut report) = self
+            .executor
+            .submit(back, reloads, self.ui.as_mut(), mode)?;
+        drop(reloads_guard);
+        self.render_buffer = recycled;
+        let frame_error = report.error.take();
+        self.last_render_report = report;
+        if let Some(error) = frame_error {
+            return Err(error);
+        }
 
         // 9. Audio pump.
         if let Some(mut commands) = self.world.get_resource_mut::<AudioCommands>() {
@@ -302,10 +316,15 @@ impl Engine {
         self.ui.as_ref()
     }
 
-    /// Extractions written but not yet consumed by the backend: `0` in
-    /// `Immediate`, `≤1` in `Pipelined`.
+    /// Extractions submitted but not yet rendered: `0` on the inline executor;
+    /// `0` in `Immediate` and `≤1` in `Pipelined` on the render thread.
     pub fn frames_in_flight(&self) -> u32 {
-        self.proxies.in_flight()
+        self.executor.frames_in_flight()
+    }
+
+    /// The most recent frame's [`RenderReport`] from the executor.
+    pub fn last_render_report(&self) -> &RenderReport {
+        &self.last_render_report
     }
 
     /// Whether a close request or host exit has been received.
@@ -320,7 +339,7 @@ impl Engine {
 
     /// Forwards a surface resize to the backend (windowed driver).
     pub(crate) fn resize(&mut self, size: SurfaceSize) -> EngineResult<()> {
-        self.backend.resize(size)
+        self.executor.resize(size)
     }
 
     /// Marks the engine for shutdown (windowed driver, on close request).

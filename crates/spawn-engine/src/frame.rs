@@ -2,17 +2,18 @@
 
 /// How far the render backend is allowed to lag the simulation frontend.
 ///
-/// The render-proxy store is double-buffered, so the lag is structurally bounded
-/// to at most one frame regardless of mode (Finding 1: bound the pipeline, never
-/// unbounded).
+/// On the inline executor both modes are synchronous, so frames-in-flight is
+/// always zero. On the render thread the ownership-passing proxy transport bounds
+/// the lag to at most one frame (Finding 1: bound the pipeline, never unbounded).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncMode {
-    /// The backend renders the proxies extracted this frame: zero frames in
-    /// flight, lowest latency. The default, low-latency mode.
+    /// Render the proxies extracted this frame: zero frames in flight, lowest
+    /// latency. The default.
     #[default]
     Immediate,
-    /// The backend renders the previous frame's proxies: exactly one frame in
-    /// flight, never more.
+    /// On the render thread, render the previous frame's proxies: at most one
+    /// frame in flight, never more. Collapses to `Immediate` on the inline
+    /// executor.
     Pipelined,
 }
 

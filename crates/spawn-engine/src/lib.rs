@@ -31,7 +31,7 @@ pub use frame::{ScheduleLabel, SyncMode};
 pub use input::InputFrame;
 pub use render::{
     CameraProxy, HeadlessBackend, RenderBackend, RenderProxies, RenderProxy, RenderReload,
-    WgpuBackend,
+    RenderReport, WgpuBackend,
 };
 pub use time::Time;
 pub use ui::DEFAULT_FONT;

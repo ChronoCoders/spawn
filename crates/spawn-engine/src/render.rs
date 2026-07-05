@@ -1,11 +1,12 @@
 //! The frontend/backend boundary: render proxies (backend-owned plain data
-//! extracted from the ECS world at the sync point), the double-buffered proxy
-//! store that bounds frames-in-flight, the [`RenderBackend`] trait, and its two
-//! implementations.
+//! extracted from the ECS world at the sync point), the [`RenderExecutor`] seam
+//! that publishes a filled proxy buffer by ownership (returning a recycled empty
+//! one), the [`RenderBackend`] trait, and its two implementations.
 //!
 //! Render-relevant state crosses the frame boundary only as extracted proxies; a
 //! backend never reads live ECS storage during `submit`, and the frontend never
-//! touches a published buffer (Finding 2: thread-owned proxies, no shared lock).
+//! touches a buffer it has handed off (Finding 2: single-owner proxies, no shared
+//! lock).
 
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use spawn_render::{
 };
 use spawn_ui::{DrawList, UiTree};
 
-use crate::error::EngineResult;
+use crate::error::{EngineError, EngineResult};
 use crate::frame::SyncMode;
 use crate::ui::DEFAULT_FONT;
 
@@ -99,51 +100,100 @@ pub trait RenderBackend {
     }
 }
 
-/// The engine-private double buffer. Two `RenderProxies` and an alternating
-/// cursor make the frontend→backend lag structurally bounded: the backend can
-/// never read more than one frame behind the frontend.
-pub(crate) struct RenderProxyStore {
-    buffers: [RenderProxies; 2],
-    current: usize,
-    in_flight: u32,
+/// The backend's per-frame outcome, observable without reading backend state
+/// across the executor boundary. `error` carries a per-frame backend failure so
+/// the frontend can surface it from `tick`; it is `None` on a rendered frame.
+#[derive(Debug, Default)]
+pub struct RenderReport {
+    /// Monotonic index of the frame the backend last rendered.
+    pub frame: u64,
+    /// Draw proxies submitted on that frame.
+    pub draw_count: usize,
+    /// The frame's backend error, when the frame failed.
+    pub error: Option<EngineError>,
 }
 
-impl RenderProxyStore {
-    pub(crate) fn new() -> Self {
+/// The seam between the frame loop and the render backend. Frame publishing goes
+/// through an executor instead of calling [`RenderBackend::submit`] inline, so the
+/// backend can move to a render thread without changing the loop. Proxy buffers
+/// are passed by ownership: the frontend hands over a filled buffer and gets a
+/// recycled empty one back, so a buffer is owned by exactly one side at a time.
+pub(crate) trait RenderExecutor {
+    /// Renders the filled proxy buffer for this frame, running any render-reload
+    /// hooks for `reloads` first and compositing `ui` when present. Returns the
+    /// recycled (cleared) buffer to extract into next frame plus the frame's
+    /// [`RenderReport`]. A per-frame backend error is carried in the report; a
+    /// transport failure (render thread gone) is an `Err`.
+    fn submit(
+        &mut self,
+        filled: RenderProxies,
+        reloads: &[ReloadEvent],
+        ui: Option<&mut UiTree>,
+        mode: SyncMode,
+    ) -> EngineResult<(RenderProxies, RenderReport)>;
+    /// Reconfigures the backend for a new surface size.
+    fn resize(&mut self, size: SurfaceSize) -> EngineResult<()>;
+    /// Extractions submitted but not yet rendered: `0` for the inline executor.
+    fn frames_in_flight(&self) -> u32;
+}
+
+/// The synchronous executor: owns the backend and renders on the calling thread.
+/// `Immediate` and `Pipelined` collapse to the same behavior (render the buffer
+/// just extracted), so frames-in-flight is always `0`. This is the headless and
+/// single-threaded path, kept bit-reproducible.
+pub(crate) struct InlineExecutor {
+    backend: Box<dyn RenderBackend>,
+    reloads: Vec<RenderReload>,
+    frame: u64,
+}
+
+impl InlineExecutor {
+    pub(crate) fn new(backend: Box<dyn RenderBackend>, reloads: Vec<RenderReload>) -> Self {
         Self {
-            buffers: [RenderProxies::default(), RenderProxies::default()],
-            current: 0,
-            in_flight: 0,
+            backend,
+            reloads,
+            frame: 0,
         }
     }
+}
 
-    /// The buffer the frontend extracts into this frame.
-    pub(crate) fn back_mut(&mut self) -> &mut RenderProxies {
-        &mut self.buffers[self.current]
-    }
-
-    /// The buffer the backend reads this frame: the just-extracted one in
-    /// `Immediate`, the previous frame's in `Pipelined`.
-    pub(crate) fn read(&self, mode: SyncMode) -> &RenderProxies {
-        let index = match mode {
-            SyncMode::Immediate => self.current,
-            SyncMode::Pipelined => 1 - self.current,
+impl RenderExecutor for InlineExecutor {
+    fn submit(
+        &mut self,
+        mut filled: RenderProxies,
+        reloads: &[ReloadEvent],
+        ui: Option<&mut UiTree>,
+        _mode: SyncMode,
+    ) -> EngineResult<(RenderProxies, RenderReport)> {
+        let mut report = RenderReport {
+            frame: self.frame,
+            draw_count: filled.draws.len(),
+            error: None,
         };
-        &self.buffers[index]
+        self.frame += 1;
+        if !reloads.is_empty() && !self.reloads.is_empty() {
+            if let Err(e) = self
+                .backend
+                .apply_render_reloads(reloads, &mut self.reloads)
+            {
+                report.error = Some(e);
+                filled.reset();
+                return Ok((filled, report));
+            }
+        }
+        if let Err(e) = self.backend.submit(&filled, ui) {
+            report.error = Some(e);
+        }
+        filled.reset();
+        Ok((filled, report))
     }
 
-    /// Advances to the next frame's buffer and records frames-in-flight (`0` in
-    /// `Immediate`, `1` in `Pipelined`).
-    pub(crate) fn advance(&mut self, mode: SyncMode) {
-        self.in_flight = match mode {
-            SyncMode::Immediate => 0,
-            SyncMode::Pipelined => 1,
-        };
-        self.current = 1 - self.current;
+    fn resize(&mut self, size: SurfaceSize) -> EngineResult<()> {
+        self.backend.resize(size)
     }
 
-    pub(crate) fn in_flight(&self) -> u32 {
-        self.in_flight
+    fn frames_in_flight(&self) -> u32 {
+        0
     }
 }
 

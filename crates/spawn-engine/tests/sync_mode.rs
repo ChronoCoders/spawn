@@ -1,5 +1,6 @@
-//! Sync-mode latency: `Immediate` renders this frame's proxies with zero frames
-//! in flight; `Pipelined` renders the previous frame's with at most one.
+//! Sync-mode latency on the inline executor: it renders the buffer extracted this
+//! frame in both modes, so frames-in-flight is `0`. The `Pipelined` one-frame lag
+//! is a property of the render thread and is covered by the threaded executor.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -75,15 +76,36 @@ fn immediate_renders_current_frame_zero_in_flight() {
 }
 
 #[test]
-fn pipelined_renders_previous_frame_bounded_in_flight() {
-    let (counts, flights) = run(SyncMode::Pipelined);
+fn last_render_report_tracks_frame_and_draw_count() {
+    let mut app = App::new();
+    app.add_extract(|world: &spawn_ecs::World, proxies: &mut RenderProxies| {
+        let frame = world.get_resource::<Time>().map(|t| t.frame()).unwrap_or(0);
+        for _ in 0..frame {
+            proxies.draws.push(RenderProxy {
+                model: Mat4::IDENTITY,
+                mesh: AssetId::from_canonical_path("mesh"),
+                material: AssetId::from_canonical_path("material"),
+            });
+        }
+    });
+    let mut engine = app.build_headless().unwrap();
+    engine.tick().unwrap();
+    engine.tick().unwrap();
+
+    let report = engine.last_render_report();
     assert_eq!(
-        counts,
-        vec![0, 1, 2, 3, 4],
-        "renders previous frame's draws"
+        report.draw_count, 2,
+        "report reflects this frame's draw count"
     );
-    assert!(
-        flights.iter().all(|&f| f <= 1),
-        "at most one frame in flight"
-    );
+    assert_eq!(report.frame, 1, "frame index advances once per submit");
+    assert!(report.error.is_none(), "no error on a clean frame");
+}
+
+#[test]
+fn pipelined_inline_collapses_to_immediate() {
+    // On the inline executor there is no render thread to lag, so `Pipelined`
+    // renders this frame's draws with zero frames in flight, same as `Immediate`.
+    let (counts, flights) = run(SyncMode::Pipelined);
+    assert_eq!(counts, vec![1, 2, 3, 4, 5], "renders this frame's draws");
+    assert!(flights.iter().all(|&f| f == 0), "zero frames in flight");
 }
