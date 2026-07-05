@@ -31,6 +31,11 @@ pub enum EngineError {
     Audio(spawn_audio::AudioError),
     /// A UI layout or draw-list operation failed.
     Ui(spawn_ui::UiError),
+    /// The render thread panicked, disconnected, or failed to build.
+    RenderThread {
+        /// Where the render thread failed.
+        context: &'static str,
+    },
     /// `run`/`run_headless` was called on an engine that is already running.
     AlreadyRunning,
 }
@@ -46,6 +51,7 @@ impl fmt::Display for EngineError {
             Self::Asset(e) => write!(f, "asset error: {e}"),
             Self::Audio(e) => write!(f, "audio error: {e}"),
             Self::Ui(e) => write!(f, "ui error: {e}"),
+            Self::RenderThread { context } => write!(f, "render thread error: {context}"),
             Self::AlreadyRunning => write!(f, "engine is already running"),
         }
     }

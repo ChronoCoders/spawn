@@ -2,8 +2,7 @@
 //! frame in both modes, so frames-in-flight is `0`. The `Pipelined` one-frame lag
 //! is a property of the render thread and is covered by the threaded executor.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use spawn_asset::AssetId;
 use spawn_core::Mat4;
@@ -12,9 +11,10 @@ use spawn_engine::{
     SyncMode, Time,
 };
 
-/// Records the draw count submitted each frame.
+/// Records the draw count submitted each frame. `Arc<Mutex<_>>` because the
+/// backend is `Send` (it may run on the render thread).
 struct Recording {
-    counts: Rc<RefCell<Vec<usize>>>,
+    counts: Arc<Mutex<Vec<usize>>>,
 }
 
 impl RenderBackend for Recording {
@@ -23,7 +23,10 @@ impl RenderBackend for Recording {
         proxies: &RenderProxies,
         _ui: Option<&mut spawn_engine::UiTree>,
     ) -> EngineResult<()> {
-        self.counts.borrow_mut().push(proxies.draws.len());
+        self.counts
+            .lock()
+            .expect("counts lock")
+            .push(proxies.draws.len());
         Ok(())
     }
 
@@ -35,7 +38,7 @@ impl RenderBackend for Recording {
 /// Runs five frames where frame N extracts N draw proxies, returning what the
 /// backend rendered each frame and the frames-in-flight after each tick.
 fn run(mode: SyncMode) -> (Vec<usize>, Vec<u32>) {
-    let counts = Rc::new(RefCell::new(Vec::new()));
+    let counts = Arc::new(Mutex::new(Vec::new()));
     let mut app = App::new();
     app.set_config(EngineConfig {
         sync_mode: mode,
@@ -53,7 +56,7 @@ fn run(mode: SyncMode) -> (Vec<usize>, Vec<u32>) {
     });
 
     let backend = Box::new(Recording {
-        counts: Rc::clone(&counts),
+        counts: Arc::clone(&counts),
     });
     let mut engine = app.build_headless_with(1.0 / 60.0, backend).unwrap();
 
@@ -62,9 +65,12 @@ fn run(mode: SyncMode) -> (Vec<usize>, Vec<u32>) {
         engine.tick().unwrap();
         flights.push(engine.frames_in_flight());
     }
-    // Drop the engine (and the backend's Rc clone) before reclaiming the counts.
+    // Drop the engine (and the backend's Arc clone) before reclaiming the counts.
     drop(engine);
-    let counts = Rc::try_unwrap(counts).unwrap().into_inner();
+    let counts = Arc::try_unwrap(counts)
+        .expect("sole owner")
+        .into_inner()
+        .expect("counts lock");
     (counts, flights)
 }
 

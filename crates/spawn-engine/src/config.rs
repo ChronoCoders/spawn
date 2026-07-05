@@ -28,8 +28,25 @@ pub struct EngineConfig {
     /// files. Defaults to `false`; the deterministic headless path keeps it off so
     /// runs stay reproducible. Enable it on the windowed (wall-clock) path.
     pub hot_reload: bool,
+    /// Whether rendering runs on a dedicated render thread (the `ThreadedExecutor`)
+    /// instead of inline on the frame thread. Defaults to `false` so headless runs
+    /// stay single-threaded and reproducible; [`windowed`](EngineConfig::windowed)
+    /// turns it on.
+    pub render_thread: bool,
     /// Window configuration; ignored in headless mode.
     pub window: WindowConfig,
+}
+
+impl EngineConfig {
+    /// The recommended windowed configuration: a dedicated render thread and asset
+    /// hot-reload on, on top of the [`Default`] timestep and sync settings.
+    pub fn windowed() -> Self {
+        Self {
+            render_thread: true,
+            hot_reload: true,
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for EngineConfig {
@@ -41,6 +58,7 @@ impl Default for EngineConfig {
             sync_mode: SyncMode::Immediate,
             asset_root: PathBuf::from("."),
             hot_reload: false,
+            render_thread: false,
             window: WindowConfig::default(),
         }
     }

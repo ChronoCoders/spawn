@@ -19,6 +19,7 @@ pub struct NodeId {
 
 const _: () = assert!(std::mem::size_of::<NodeId>() == 8);
 
+#[derive(Clone)]
 pub(crate) struct Node {
     pub(crate) style: Style,
     pub(crate) parent: Option<NodeId>,
@@ -38,12 +39,15 @@ pub(crate) struct Node {
     pub(crate) intrinsic: Option<Vec2>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Slot {
     pub(crate) generation: u32,
     pub(crate) node: Option<Node>,
 }
 
-/// Retained tree of styled nodes with slotmap-style storage.
+/// Retained tree of styled nodes with slotmap-style storage. `Clone` yields an
+/// independent snapshot, used to hand the overlay to the render thread.
+#[derive(Clone)]
 pub struct UiTree {
     pub(crate) slots: Vec<Slot>,
     pub(crate) free: Vec<u32>,

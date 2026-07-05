@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use spawn_asset::{AssetServer, AssetServerConfig, ReloadEvent};
+use spawn_asset::{AssetServer, AssetServerConfig};
 use spawn_audio::{AudioConfig, AudioEngine};
 use spawn_ecs::{EcsResult, Schedule, Stage, World};
 use spawn_input::InputState;
@@ -22,7 +22,9 @@ use crate::audio::AudioCommands;
 use crate::config::EngineConfig;
 use crate::error::EngineResult;
 use crate::input::InputFrame;
-use crate::render::{InlineExecutor, RenderBackend, RenderExecutor, RenderProxies, RenderReport};
+use crate::render::{
+    InlineExecutor, RenderExecutor, RenderProxies, RenderReport, RenderTarget, ThreadedExecutor,
+};
 use crate::time::Time;
 use crate::ui::{UiSetup, UiUpdate};
 use spawn_ui::{Style, UiTree};
@@ -91,7 +93,7 @@ impl Engine {
     /// after startup so startup-deferred resources/spawns are visible.
     pub(crate) fn assemble(
         parts: EngineParts,
-        backend: Box<dyn RenderBackend>,
+        target: RenderTarget,
         clock: Clock,
     ) -> EngineResult<Self> {
         let EngineParts {
@@ -115,7 +117,6 @@ impl Engine {
 
         let input = InputState::new()?;
         let audio = AudioEngine::new(AudioConfig::default())?;
-        crate::observability::log_startup(backend.adapter_info(), audio.backend_kind());
         let mut assets = AssetServer::new(AssetServerConfig {
             root: config.asset_root.clone(),
             hot_reload: config.hot_reload,
@@ -162,8 +163,13 @@ impl Engine {
         }
         fixed_schedule.build(&world)?;
 
-        let executor: Box<dyn RenderExecutor> =
-            Box::new(InlineExecutor::new(backend, render_reloads));
+        let executor: Box<dyn RenderExecutor> = match target {
+            RenderTarget::Inline(backend) => Box::new(InlineExecutor::new(backend, render_reloads)),
+            RenderTarget::Threaded(build) => {
+                Box::new(ThreadedExecutor::spawn(build, render_reloads)?)
+            }
+        };
+        crate::observability::log_startup(executor.adapter_info(), audio.backend_kind());
 
         Ok(Self {
             executor,
@@ -218,7 +224,7 @@ impl Engine {
             frame_assets.applied = applied;
         }
         if let Some(mut reload_events) = self.world.get_resource_mut::<ReloadEvents>() {
-            reload_events.refresh(reloads);
+            reload_events.refresh(reloads.clone());
         }
 
         // 4. Fixed-step accumulator: fixed schedule then fixed hooks per tick,
@@ -265,15 +271,8 @@ impl Engine {
         // render thread later), and hands back the recycled buffer plus the frame
         // report. A per-frame backend error is surfaced from tick here.
         let mode = self.config.sync_mode;
-        let reloads_guard = self.world.get_resource::<ReloadEvents>();
-        let reloads: &[ReloadEvent] = match &reloads_guard {
-            Some(events) => events.events(),
-            None => &[],
-        };
-        let (recycled, mut report) = self
-            .executor
-            .submit(back, reloads, self.ui.as_mut(), mode)?;
-        drop(reloads_guard);
+        let ui = self.ui.clone();
+        let (recycled, mut report) = self.executor.submit(back, reloads, ui, mode)?;
         self.render_buffer = recycled;
         let frame_error = report.error.take();
         self.last_render_report = report;
@@ -340,6 +339,13 @@ impl Engine {
     /// Forwards a surface resize to the backend (windowed driver).
     pub(crate) fn resize(&mut self, size: SurfaceSize) -> EngineResult<()> {
         self.executor.resize(size)
+    }
+
+    /// Shuts the render executor down, joining the render thread on the threaded
+    /// path. Idempotent. Called by the windowed driver at teardown before the
+    /// engine drops; also public so a headless caller can join explicitly.
+    pub fn shutdown(&mut self) -> EngineResult<()> {
+        self.executor.shutdown()
     }
 
     /// Marks the engine for shutdown (windowed driver, on close request).

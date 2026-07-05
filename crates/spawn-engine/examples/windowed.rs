@@ -122,7 +122,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut app = App::new();
     app.set_config(EngineConfig {
         fixed_timestep: fixed_dt,
-        window: WindowConfig::default().with_title("Spawn Engine — 2c"),
+        render_thread: true,
+        window: WindowConfig::default().with_title("Spawn Engine 3c"),
         ..Default::default()
     });
 

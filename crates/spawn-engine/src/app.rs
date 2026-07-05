@@ -16,7 +16,9 @@ use crate::config::EngineConfig;
 use crate::engine::{Clock, Engine, EngineParts};
 use crate::error::{EngineError, EngineResult};
 use crate::frame::ScheduleLabel;
-use crate::render::{HeadlessBackend, RenderBackend, RenderProxies, RenderReload, WgpuBackend};
+use crate::render::{
+    HeadlessBackend, RenderBackend, RenderProxies, RenderReload, RenderTarget, WgpuBackend,
+};
 use crate::time::Time;
 
 /// The configuration aggregate: the world, the variable- and fixed-rate
@@ -143,7 +145,7 @@ impl App {
     /// no renderer, so these are not run there.
     pub fn add_render_setup<F>(&mut self, setup: F) -> &mut Self
     where
-        F: FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()> + 'static,
+        F: FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()> + Send + 'static,
     {
         self.render_setups.push(Box::new(setup));
         self
@@ -275,8 +277,14 @@ impl App {
                 reason: "fixed_timestep must be > 0",
             });
         }
+        let threaded = self.config.render_thread;
         let parts = self.into_parts();
-        Engine::assemble(parts, backend, Clock::Fixed(frame_dt))
+        let target = if threaded {
+            RenderTarget::Threaded(Box::new(move || Ok(backend)))
+        } else {
+            RenderTarget::Inline(backend)
+        };
+        Engine::assemble(parts, target, Clock::Fixed(frame_dt))
     }
 
     fn into_parts(self) -> EngineParts {
@@ -315,20 +323,38 @@ impl PlatformApp for WindowedDriver {
         let setups = std::mem::take(&mut parts.render_setups);
         let (w, h) = window.size();
         let size = SurfaceSize::new(w.max(1), h.max(1));
-        let backend: Box<dyn RenderBackend> = match WgpuBackend::new(
-            window,
-            size,
-            RendererConfig::default(),
-            Color::BLACK,
-            setups,
-        ) {
-            Ok(backend) => Box::new(backend),
-            Err(err) => {
-                *self.error.borrow_mut() = Some(err);
-                return;
+        // On the threaded path the backend is built on the render thread (where the
+        // surface and GPU resources live); otherwise it is built here inline.
+        // Surface creation off the main thread is supported on Vulkan/DX12; macOS
+        // (Metal) requires main-thread surface creation, so a Metal target must pin
+        // it before enabling `render_thread`.
+        let target = if parts.config.render_thread {
+            RenderTarget::Threaded(Box::new(move || {
+                WgpuBackend::new(
+                    window,
+                    size,
+                    RendererConfig::default(),
+                    Color::BLACK,
+                    setups,
+                )
+                .map(|backend| Box::new(backend) as Box<dyn RenderBackend>)
+            }))
+        } else {
+            match WgpuBackend::new(
+                window,
+                size,
+                RendererConfig::default(),
+                Color::BLACK,
+                setups,
+            ) {
+                Ok(backend) => RenderTarget::Inline(Box::new(backend)),
+                Err(err) => {
+                    *self.error.borrow_mut() = Some(err);
+                    return;
+                }
             }
         };
-        match Engine::assemble(parts, backend, Clock::Realtime(None)) {
+        match Engine::assemble(parts, target, Clock::Realtime(None)) {
             Ok(engine) => self.engine = Some(engine),
             Err(err) => *self.error.borrow_mut() = Some(err),
         }
@@ -370,7 +396,15 @@ impl PlatformApp for WindowedDriver {
     }
 
     fn exit(&mut self, _window: &Window) {
-        // Drops the engine, running teardown in field order.
-        self.engine = None;
+        // Join the render thread before the engine drops, then drop the engine
+        // (teardown in field order). A join error is recorded if none is pending.
+        if let Some(mut engine) = self.engine.take() {
+            if let Err(err) = engine.shutdown() {
+                let mut slot = self.error.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(err);
+                }
+            }
+        }
     }
 }

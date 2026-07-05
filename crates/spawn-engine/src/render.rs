@@ -8,7 +8,9 @@
 //! touches a buffer it has handed off (Finding 2: single-owner proxies, no shared
 //! lock).
 
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use spawn_asset::{AssetId, ReloadEvent};
 use spawn_core::{Color, Mat4};
@@ -72,8 +74,9 @@ impl RenderProxies {
 }
 
 /// Consumes extracted proxies and turns them into presented frames. Implemented
-/// by [`WgpuBackend`] (real GPU) and [`HeadlessBackend`] (no GPU).
-pub trait RenderBackend {
+/// by [`WgpuBackend`] (real GPU) and [`HeadlessBackend`] (no GPU). `Send` so the
+/// backend can be built and owned on the render thread.
+pub trait RenderBackend: Send {
     /// Renders one frame from the published proxy buffer. `ui`, when present, is
     /// the engine-owned overlay tree: the backend lays it out and composites it
     /// over the lit scene. The headless backend ignores it.
@@ -120,21 +123,28 @@ pub struct RenderReport {
 /// recycled empty one back, so a buffer is owned by exactly one side at a time.
 pub(crate) trait RenderExecutor {
     /// Renders the filled proxy buffer for this frame, running any render-reload
-    /// hooks for `reloads` first and compositing `ui` when present. Returns the
-    /// recycled (cleared) buffer to extract into next frame plus the frame's
+    /// hooks for `reloads` first and compositing the `ui` snapshot when present.
+    /// Returns the recycled (cleared) buffer to extract into next frame plus a
     /// [`RenderReport`]. A per-frame backend error is carried in the report; a
-    /// transport failure (render thread gone) is an `Err`.
+    /// transport failure (render thread gone) is an `Err`. Buffers, reloads, and
+    /// the UI snapshot are owned so they can cross to the render thread.
     fn submit(
         &mut self,
         filled: RenderProxies,
-        reloads: &[ReloadEvent],
-        ui: Option<&mut UiTree>,
+        reloads: Vec<ReloadEvent>,
+        ui: Option<UiTree>,
         mode: SyncMode,
     ) -> EngineResult<(RenderProxies, RenderReport)>;
     /// Reconfigures the backend for a new surface size.
     fn resize(&mut self, size: SurfaceSize) -> EngineResult<()>;
-    /// Extractions submitted but not yet rendered: `0` for the inline executor.
+    /// Extractions submitted but not yet rendered: `0` in `Immediate`, `≤1` in
+    /// `Pipelined` on the render thread; always `0` for the inline executor.
     fn frames_in_flight(&self) -> u32;
+    /// The selected GPU adapter's identity, for startup logging.
+    fn adapter_info(&self) -> Option<AdapterInfo>;
+    /// Shuts the executor down, joining the render thread. Idempotent; a no-op for
+    /// the inline executor.
+    fn shutdown(&mut self) -> EngineResult<()>;
 }
 
 /// The synchronous executor: owns the backend and renders on the calling thread.
@@ -161,8 +171,8 @@ impl RenderExecutor for InlineExecutor {
     fn submit(
         &mut self,
         mut filled: RenderProxies,
-        reloads: &[ReloadEvent],
-        ui: Option<&mut UiTree>,
+        reloads: Vec<ReloadEvent>,
+        mut ui: Option<UiTree>,
         _mode: SyncMode,
     ) -> EngineResult<(RenderProxies, RenderReport)> {
         let mut report = RenderReport {
@@ -174,14 +184,14 @@ impl RenderExecutor for InlineExecutor {
         if !reloads.is_empty() && !self.reloads.is_empty() {
             if let Err(e) = self
                 .backend
-                .apply_render_reloads(reloads, &mut self.reloads)
+                .apply_render_reloads(&reloads, &mut self.reloads)
             {
                 report.error = Some(e);
                 filled.reset();
                 return Ok((filled, report));
             }
         }
-        if let Err(e) = self.backend.submit(&filled, ui) {
+        if let Err(e) = self.backend.submit(&filled, ui.as_mut()) {
             report.error = Some(e);
         }
         filled.reset();
@@ -194,6 +204,244 @@ impl RenderExecutor for InlineExecutor {
 
     fn frames_in_flight(&self) -> u32 {
         0
+    }
+
+    fn adapter_info(&self) -> Option<AdapterInfo> {
+        self.backend.adapter_info()
+    }
+
+    fn shutdown(&mut self) -> EngineResult<()> {
+        Ok(())
+    }
+}
+
+/// How [`Engine::assemble`](crate::Engine) obtains its backend: an already-built
+/// backend rendered inline, or a builder run on the render thread. The threaded
+/// builder is `Send` and runs on the render thread so surface/GPU creation and the
+/// render-setup hooks happen where the backend lives.
+pub(crate) enum RenderTarget {
+    Inline(Box<dyn RenderBackend>),
+    Threaded(Box<dyn FnOnce() -> EngineResult<Box<dyn RenderBackend>> + Send>),
+}
+
+/// Messages from the frame thread to the render thread. `Submit` is large and
+/// sent every frame; boxing it to shrink the enum would add a per-frame heap
+/// allocation, defeating the ownership-passing transport, so the size gap is
+/// intentional.
+#[allow(clippy::large_enum_variant)]
+enum RenderMsg {
+    Submit {
+        proxies: RenderProxies,
+        reloads: Vec<ReloadEvent>,
+        ui: Option<UiTree>,
+    },
+    Resize(SurfaceSize),
+    Shutdown,
+}
+
+/// A rendered frame handed back to the frame thread: the recycled (cleared) buffer
+/// and the frame's report.
+struct Completion {
+    proxies: RenderProxies,
+    report: RenderReport,
+}
+
+/// The threaded executor: a single OS render thread owns the backend and renders
+/// off the frame thread. Proxy buffers cross by ownership over channels (no shared
+/// lock); `Immediate` blocks on the completion, `Pipelined` keeps at most one
+/// frame in flight via a two-buffer cycle.
+pub(crate) struct ThreadedExecutor {
+    messages: Sender<RenderMsg>,
+    completions: Receiver<EngineResult<Completion>>,
+    handle: Option<JoinHandle<()>>,
+    adapter: Option<AdapterInfo>,
+    spare: Option<RenderProxies>,
+    outstanding: u32,
+}
+
+impl ThreadedExecutor {
+    pub(crate) fn spawn(
+        build: Box<dyn FnOnce() -> EngineResult<Box<dyn RenderBackend>> + Send>,
+        reloads: Vec<RenderReload>,
+    ) -> EngineResult<Self> {
+        let (msg_tx, msg_rx) = mpsc::channel::<RenderMsg>();
+        let (comp_tx, comp_rx) = mpsc::channel::<EngineResult<Completion>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<EngineResult<Option<AdapterInfo>>>();
+        let handle = std::thread::Builder::new()
+            .name("spawn-render".to_string())
+            .spawn(move || render_loop(build, reloads, &msg_rx, &comp_tx, &ready_tx))
+            .map_err(|_| EngineError::RenderThread {
+                context: "failed to spawn render thread",
+            })?;
+        let adapter = match ready_rx.recv() {
+            Ok(Ok(info)) => info,
+            Ok(Err(e)) => {
+                let _ = handle.join();
+                return Err(e);
+            }
+            Err(_) => {
+                let _ = handle.join();
+                return Err(EngineError::RenderThread {
+                    context: "render thread exited during startup",
+                });
+            }
+        };
+        Ok(Self {
+            messages: msg_tx,
+            completions: comp_rx,
+            handle: Some(handle),
+            adapter,
+            spare: Some(RenderProxies::default()),
+            outstanding: 0,
+        })
+    }
+
+    fn recv_completion(&mut self) -> EngineResult<Completion> {
+        let received = self
+            .completions
+            .recv()
+            .map_err(|_| EngineError::RenderThread {
+                context: "render thread disconnected",
+            })?;
+        self.outstanding = self.outstanding.saturating_sub(1);
+        received
+    }
+}
+
+impl RenderExecutor for ThreadedExecutor {
+    fn submit(
+        &mut self,
+        filled: RenderProxies,
+        reloads: Vec<ReloadEvent>,
+        ui: Option<UiTree>,
+        mode: SyncMode,
+    ) -> EngineResult<(RenderProxies, RenderReport)> {
+        self.messages
+            .send(RenderMsg::Submit {
+                proxies: filled,
+                reloads,
+                ui,
+            })
+            .map_err(|_| EngineError::RenderThread {
+                context: "render thread disconnected on submit",
+            })?;
+        self.outstanding += 1;
+        // `Immediate` blocks for this frame's completion (zero in flight).
+        // `Pipelined` returns the previous frame's completion once two are in
+        // flight, or a spare buffer while priming, keeping at most one in flight.
+        if mode == SyncMode::Immediate || self.outstanding >= 2 {
+            let completion = self.recv_completion()?;
+            Ok((completion.proxies, completion.report))
+        } else if let Some(spare) = self.spare.take() {
+            Ok((spare, RenderReport::default()))
+        } else {
+            let completion = self.recv_completion()?;
+            Ok((completion.proxies, completion.report))
+        }
+    }
+
+    fn resize(&mut self, size: SurfaceSize) -> EngineResult<()> {
+        self.messages
+            .send(RenderMsg::Resize(size))
+            .map_err(|_| EngineError::RenderThread {
+                context: "render thread disconnected on resize",
+            })
+    }
+
+    fn frames_in_flight(&self) -> u32 {
+        self.outstanding
+    }
+
+    fn adapter_info(&self) -> Option<AdapterInfo> {
+        self.adapter.clone()
+    }
+
+    fn shutdown(&mut self) -> EngineResult<()> {
+        if self.handle.is_none() {
+            return Ok(());
+        }
+        let _ = self.messages.send(RenderMsg::Shutdown);
+        while self.outstanding > 0 {
+            match self.completions.recv() {
+                Ok(_) => self.outstanding -= 1,
+                Err(_) => break,
+            }
+        }
+        match self.handle.take() {
+            Some(handle) => handle.join().map_err(|_| EngineError::RenderThread {
+                context: "render thread panicked",
+            }),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for ThreadedExecutor {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+/// The render thread: builds the backend, reports its adapter identity, then
+/// renders each `Submit` and hands the recycled buffer back until `Shutdown` or a
+/// disconnect. A per-frame backend error rides back in the report; a fatal build
+/// or resize error ends the thread and surfaces on the next completion receive.
+fn render_loop(
+    build: Box<dyn FnOnce() -> EngineResult<Box<dyn RenderBackend>> + Send>,
+    mut reloads: Vec<RenderReload>,
+    messages: &Receiver<RenderMsg>,
+    completions: &Sender<EngineResult<Completion>>,
+    ready: &Sender<EngineResult<Option<AdapterInfo>>>,
+) {
+    let mut backend = match build() {
+        Ok(backend) => backend,
+        Err(e) => {
+            let _ = ready.send(Err(e));
+            return;
+        }
+    };
+    if ready.send(Ok(backend.adapter_info())).is_err() {
+        return;
+    }
+    let mut frame: u64 = 0;
+    while let Ok(message) = messages.recv() {
+        match message {
+            RenderMsg::Submit {
+                mut proxies,
+                reloads: events,
+                mut ui,
+            } => {
+                let mut report = RenderReport {
+                    frame,
+                    draw_count: proxies.draws.len(),
+                    error: None,
+                };
+                frame += 1;
+                if !events.is_empty() && !reloads.is_empty() {
+                    if let Err(e) = backend.apply_render_reloads(&events, &mut reloads) {
+                        report.error = Some(e);
+                    }
+                }
+                if report.error.is_none() {
+                    if let Err(e) = backend.submit(&proxies, ui.as_mut()) {
+                        report.error = Some(e);
+                    }
+                }
+                proxies.reset();
+                if completions
+                    .send(Ok(Completion { proxies, report }))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            RenderMsg::Resize(size) => {
+                if backend.resize(size).is_err() {
+                    break;
+                }
+            }
+            RenderMsg::Shutdown => break,
+        }
     }
 }
 
@@ -258,7 +506,8 @@ pub struct WgpuBackend {
 /// from the renderer and registers them in the registry, run once at backend
 /// construction (after the renderer exists). Headless mode has no renderer and
 /// does not run these.
-pub type RenderSetup = Box<dyn FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()>>;
+pub type RenderSetup =
+    Box<dyn FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()> + Send>;
 
 /// An app-provided render-reload hook: rebuilds GPU `Mesh`/`Material` resources in
 /// the registry when a watched asset reloads in place. Run on the render backend
