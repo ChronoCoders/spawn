@@ -9,6 +9,7 @@
 //! proxies (no shared lock spans the pipeline).
 
 mod app;
+mod asset;
 mod audio;
 mod config;
 mod engine;
@@ -21,6 +22,7 @@ mod time;
 mod ui;
 
 pub use app::App;
+pub use asset::{FrameAssets, ReloadEvents};
 pub use audio::{AudioCommand, AudioCommands};
 pub use config::EngineConfig;
 pub use engine::Engine;
@@ -28,11 +30,13 @@ pub use error::{EngineError, EngineResult};
 pub use frame::{ScheduleLabel, SyncMode};
 pub use input::InputFrame;
 pub use render::{
-    CameraProxy, HeadlessBackend, RenderBackend, RenderProxies, RenderProxy, WgpuBackend,
+    CameraProxy, HeadlessBackend, RenderBackend, RenderProxies, RenderProxy, RenderReload,
+    WgpuBackend,
 };
 pub use time::Time;
 pub use ui::DEFAULT_FONT;
 
+pub use spawn_asset::{AppliedReport, ReloadEvent, ReloadOutcome};
 pub use spawn_input::{KeyCode, Keyboard, Mouse, MouseButton};
 pub use spawn_platform::WindowConfig;
 pub use spawn_render::{

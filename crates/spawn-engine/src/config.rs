@@ -1,5 +1,7 @@
 //! Engine configuration.
 
+use std::path::PathBuf;
+
 use spawn_platform::WindowConfig;
 
 use crate::frame::SyncMode;
@@ -20,6 +22,12 @@ pub struct EngineConfig {
     pub max_frame_delta: f32,
     /// How far the render backend may lag the frontend.
     pub sync_mode: SyncMode,
+    /// Filesystem root the asset server resolves load paths against.
+    pub asset_root: PathBuf,
+    /// Whether the asset server watches `asset_root` and hot-reloads changed
+    /// files. Defaults to `false`; the deterministic headless path keeps it off so
+    /// runs stay reproducible. Enable it on the windowed (wall-clock) path.
+    pub hot_reload: bool,
     /// Window configuration; ignored in headless mode.
     pub window: WindowConfig,
 }
@@ -31,6 +39,8 @@ impl Default for EngineConfig {
             max_fixed_steps_per_frame: 8,
             max_frame_delta: 0.25,
             sync_mode: SyncMode::Immediate,
+            asset_root: PathBuf::from("."),
+            hot_reload: false,
             window: WindowConfig::default(),
         }
     }

@@ -17,6 +17,7 @@ use spawn_input::InputState;
 use spawn_platform::PlatformEvent;
 use spawn_render::SurfaceSize;
 
+use crate::asset::{FrameAssets, ReloadEvents};
 use crate::audio::AudioCommands;
 use crate::config::EngineConfig;
 use crate::error::EngineResult;
@@ -53,6 +54,7 @@ pub(crate) struct EngineParts {
     /// backend's resource registry. The headless path has no renderer and ignores
     /// them.
     pub render_setups: Vec<crate::render::RenderSetup>,
+    pub render_reloads: Vec<crate::render::RenderReload>,
     pub audio_setups: Vec<crate::audio::AudioSetup>,
     pub ui_setups: Vec<UiSetup>,
     pub ui_updates: Vec<UiUpdate>,
@@ -70,6 +72,7 @@ pub struct Engine {
     fixed_schedule: Schedule,
     fixed_hooks: Vec<FixedHook>,
     extracts: Vec<ExtractFn>,
+    render_reloads: Vec<crate::render::RenderReload>,
     ui: Option<UiTree>,
     ui_updates: Vec<UiUpdate>,
     proxies: RenderProxyStore,
@@ -101,6 +104,7 @@ impl Engine {
             // Render-setup hooks are consumed by the windowed driver before
             // assemble; the headless path has no renderer to run them against.
             render_setups: _,
+            render_reloads,
             audio_setups,
             ui_setups,
             ui_updates,
@@ -113,8 +117,8 @@ impl Engine {
         let audio = AudioEngine::new(AudioConfig::default())?;
         crate::observability::log_startup(backend.adapter_info(), audio.backend_kind());
         let mut assets = AssetServer::new(AssetServerConfig {
-            root: ".".into(),
-            hot_reload: false,
+            root: config.asset_root.clone(),
+            hot_reload: config.hot_reload,
             ..Default::default()
         })?;
 
@@ -122,6 +126,8 @@ impl Engine {
         world.insert_resource(time);
         world.insert_resource(InputFrame::snapshot(&input));
         world.insert_resource(AudioCommands::new());
+        world.insert_resource(FrameAssets::default());
+        world.insert_resource(ReloadEvents::default());
 
         for setup in audio_setups {
             setup(&mut assets, &mut world)?;
@@ -166,6 +172,7 @@ impl Engine {
             fixed_schedule,
             fixed_hooks,
             extracts,
+            render_reloads,
             ui,
             ui_updates,
             proxies: RenderProxyStore::new(),
@@ -198,8 +205,21 @@ impl Engine {
             *resource = input_frame;
         }
 
-        // 3. Asset pump (the single per-frame main-thread sync point).
-        let _ = self.assets.apply_loaded();
+        // 3. Asset pump (the single per-frame main-thread sync point): apply
+        // loads, surface the report and any in-place reloads for this frame, then
+        // rebuild GPU resources for reloaded assets before the frame's submit.
+        let applied = self.assets.apply_loaded();
+        let reloads = self.assets.drain_reload_events();
+        if let Some(mut frame_assets) = self.world.get_resource_mut::<FrameAssets>() {
+            frame_assets.applied = applied;
+        }
+        if !reloads.is_empty() && !self.render_reloads.is_empty() {
+            self.backend
+                .apply_render_reloads(&reloads, &mut self.render_reloads)?;
+        }
+        if let Some(mut reload_events) = self.world.get_resource_mut::<ReloadEvents>() {
+            reload_events.refresh(reloads);
+        }
 
         // 4. Fixed-step accumulator: fixed schedule then fixed hooks per tick,
         // capped per frame so a stall cannot run unbounded ticks.

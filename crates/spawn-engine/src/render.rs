@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use spawn_asset::AssetId;
+use spawn_asset::{AssetId, ReloadEvent};
 use spawn_core::{Color, Mat4};
 use spawn_platform::Window;
 use spawn_render::{
@@ -84,6 +84,18 @@ pub trait RenderBackend {
     /// `None` so a GPU-free backend needs no override.
     fn adapter_info(&self) -> Option<AdapterInfo> {
         None
+    }
+    /// Runs the render-reload hooks against the backend's live renderer and
+    /// resource registry when assets reload in place, before the next submit. The
+    /// headless backend has no renderer and ignores them (the asset-level swap
+    /// still happens and is observable via
+    /// [`ReloadEvents`](crate::ReloadEvents)); defaults to a no-op.
+    fn apply_render_reloads(
+        &mut self,
+        _reloads: &[ReloadEvent],
+        _hooks: &mut [RenderReload],
+    ) -> EngineResult<()> {
+        Ok(())
     }
 }
 
@@ -197,6 +209,14 @@ pub struct WgpuBackend {
 /// construction (after the renderer exists). Headless mode has no renderer and
 /// does not run these.
 pub type RenderSetup = Box<dyn FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()>>;
+
+/// An app-provided render-reload hook: rebuilds GPU `Mesh`/`Material` resources in
+/// the registry when a watched asset reloads in place. Run on the render backend
+/// after the asset pump reports reloads, before the next submit. `FnMut` so it
+/// persists across reloads; `Send` so it can run on the render thread. Headless
+/// mode has no renderer and does not run these.
+pub type RenderReload =
+    Box<dyn FnMut(&[ReloadEvent], &mut Renderer, &mut RenderResources) -> EngineResult<()> + Send>;
 
 impl WgpuBackend {
     /// Builds the backend from an owned window handle and an initial surface
@@ -355,5 +375,16 @@ impl RenderBackend for WgpuBackend {
 
     fn adapter_info(&self) -> Option<AdapterInfo> {
         Some(self.renderer.adapter_info())
+    }
+
+    fn apply_render_reloads(
+        &mut self,
+        reloads: &[ReloadEvent],
+        hooks: &mut [RenderReload],
+    ) -> EngineResult<()> {
+        for hook in hooks.iter_mut() {
+            hook(reloads, &mut self.renderer, &mut self.resources)?;
+        }
+        Ok(())
     }
 }

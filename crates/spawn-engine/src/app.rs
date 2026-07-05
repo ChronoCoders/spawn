@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use spawn_asset::ReloadEvent;
 use spawn_core::Color;
 use spawn_ecs::system::BuildableSystem;
 use spawn_ecs::{EcsResult, Event, IntoSystem, Resource, Stage, World};
@@ -15,7 +16,7 @@ use crate::config::EngineConfig;
 use crate::engine::{Clock, Engine, EngineParts};
 use crate::error::{EngineError, EngineResult};
 use crate::frame::ScheduleLabel;
-use crate::render::{HeadlessBackend, RenderBackend, RenderProxies, WgpuBackend};
+use crate::render::{HeadlessBackend, RenderBackend, RenderProxies, RenderReload, WgpuBackend};
 use crate::time::Time;
 
 /// The configuration aggregate: the world, the variable- and fixed-rate
@@ -29,6 +30,7 @@ pub struct App {
     fixed_hooks: Vec<crate::engine::FixedHook>,
     extracts: Vec<crate::engine::ExtractFn>,
     render_setups: Vec<crate::render::RenderSetup>,
+    render_reloads: Vec<RenderReload>,
     audio_setups: Vec<crate::audio::AudioSetup>,
     ui_setups: Vec<crate::ui::UiSetup>,
     ui_updates: Vec<crate::ui::UiUpdate>,
@@ -59,6 +61,7 @@ impl App {
             fixed_hooks: Vec::new(),
             extracts: Vec::new(),
             render_setups: Vec::new(),
+            render_reloads: Vec::new(),
             audio_setups: Vec::new(),
             ui_setups: Vec::new(),
             ui_updates: Vec::new(),
@@ -143,6 +146,21 @@ impl App {
         F: FnOnce(&mut Renderer, &mut RenderResources) -> EngineResult<()> + 'static,
     {
         self.render_setups.push(Box::new(setup));
+        self
+    }
+
+    /// Registers a render-reload hook: rebuilds GPU mesh/material resources from
+    /// the renderer and registry when a watched asset reloads in place (windowed
+    /// mode with `hot_reload` enabled). Run on the render backend after the asset
+    /// pump reports reloads, before the next submit. The headless backend has no
+    /// renderer, so these are not run there.
+    pub fn add_render_reload<F>(&mut self, hook: F) -> &mut Self
+    where
+        F: FnMut(&[ReloadEvent], &mut Renderer, &mut RenderResources) -> EngineResult<()>
+            + Send
+            + 'static,
+    {
+        self.render_reloads.push(Box::new(hook));
         self
     }
 
@@ -270,6 +288,7 @@ impl App {
             fixed_hooks: self.fixed_hooks,
             extracts: self.extracts,
             render_setups: self.render_setups,
+            render_reloads: self.render_reloads,
             audio_setups: self.audio_setups,
             ui_setups: self.ui_setups,
             ui_updates: self.ui_updates,
