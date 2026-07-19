@@ -106,7 +106,7 @@ impl ReliableSender {
     }
 
     /// Buffer `bytes` as a new reliable message. `Err(ChannelFull)` when the window is
-    /// already at `RELIABLE_SEND_WINDOW` unacked messages — the caller must retry later.
+    /// already at `RELIABLE_SEND_WINDOW` unacked messages, the caller must retry later.
     pub fn queue(&mut self, bytes: &[u8]) -> NetResult<u16> {
         if self.count >= RELIABLE_SEND_WINDOW {
             return Err(NetError::ChannelFull);
@@ -171,7 +171,7 @@ impl ReliableSender {
     }
 
     /// Whether the `i`-th staged frame is a retransmit (its previous send timed
-    /// out unacked — the spec's definition of a lost packet for stats).
+    /// out unacked, the spec's definition of a lost packet for stats).
     pub fn staged_is_retransmit(&self, i: usize) -> bool {
         self.staged[i].1
     }

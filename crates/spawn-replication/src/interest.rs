@@ -10,7 +10,7 @@
 //! `previous` to emit spawn/despawn deltas. Defaults: `cell_size ≈ 0.5 × view_radius`
 //! (the validated cost/overdraw optimum) and a 25% exit-radius hysteresis
 //! (`exit_radius = 1.25 × view_radius`) that collapses boundary thrash. The gather block
-//! is sized to the **exit** radius — `r_cells = ceil(exit_radius / cell_size)` — so a
+//! is sized to the **exit** radius, `r_cells = ceil(exit_radius / cell_size)`, so a
 //! hysteresis-band entity is still gathered and not spuriously despawned; at the default
 //! ratio that is a 7×7 block (the bare enter radius alone would be a 5×5 block, but
 //! hysteresis extends visibility past it).
@@ -91,7 +91,7 @@ impl ClientSlot {
 /// Configuration for the visibility resource.
 #[derive(Debug, Clone, Copy)]
 pub struct VisibilityConfig {
-    /// Global grid cell size. Default `0.5 × view_radius` — the validated cost/overdraw
+    /// Global grid cell size. Default `0.5 × view_radius`, the validated cost/overdraw
     /// optimum. (The gather block is sized to the exit radius, so with hysteresis the
     /// default is a 7×7 block; see the module docs.)
     pub cell_size: f32,
@@ -151,14 +151,14 @@ impl ReplicationVisibility {
         }
     }
 
-    /// Drop a client's visibility column (no archetype impact — it is resource state).
+    /// Drop a client's visibility column (no archetype impact, it is resource state).
     pub fn remove_client(&mut self, client: ClientId) {
         self.clients.retain(|s| s.client != client);
     }
 
     /// Remove an entity's id from the spatial grid (called by the driver when the
-    /// entity leaves replication). Gather is robust to a missing call — a despawned id
-    /// is also skipped via the live check — but this reclaims the grid slot.
+    /// entity leaves replication). Gather is robust to a missing call, a despawned id
+    /// is also skipped via the live check, but this reclaims the grid slot.
     pub fn remove_entity(&mut self, id: ReplId) {
         let idx = id.index();
         if idx < self.cell_cache.len() && self.cell_cache[idx] != UNPLACED {
@@ -279,7 +279,7 @@ impl ReplicationVisibility {
             let exit2 = exit_r * exit_r;
             // The block must cover the EXIT radius, not just the enter radius: a
             // previously-visible entity stays visible out to `exit_r` (hysteresis), so it
-            // must still be gathered there — otherwise it falls outside the block and the
+            // must still be gathered there, otherwise it falls outside the block and the
             // diff spuriously despawns it, reintroducing the boundary thrash hysteresis
             // exists to prevent. At the default ratio this is a 7×7 block (ceil(20/8)=3).
             let r_cells = (exit_r / self.cell_size).ceil() as i32;
@@ -526,7 +526,7 @@ mod tests {
         // Regression: the gather block must cover the EXIT radius, not just the enter
         // radius. An entity that enters, then drifts into the hysteresis band on the
         // negative axis (where the viewer sits at the low edge of its base cell) must
-        // stay visible — not fall outside the block and get despawned.
+        // stay visible, not fall outside the block and get despawned.
         let mut w = world();
         let mut ids = ReplIdMap::new();
         let viewer = w.spawn_with((at(0.0, 0.0), Replicated, OwnerOnly(ClientId(1))));

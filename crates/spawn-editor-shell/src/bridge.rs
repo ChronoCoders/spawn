@@ -9,9 +9,9 @@ use spawn_ui::UiInputState;
 /// Where the pointer is acting this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerTarget {
-    /// Over a docked panel — input routes to the UI only.
+    /// Over a docked panel, input routes to the UI only.
     Panel,
-    /// Over the viewport — camera/picking/gizmos act (the UI still receives the
+    /// Over the viewport, camera/picking/gizmos act (the UI still receives the
     /// snapshot for hover, but does not consume the gesture).
     Viewport,
 }

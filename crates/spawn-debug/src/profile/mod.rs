@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 /// Open a profiling scope bound to a local `ScopeGuard`. `name` must be a
-/// `&'static str` (string literal or `&'static` expression) — no per-scope
+/// `&'static str` (string literal or `&'static` expression), no per-scope
 /// allocation. The scope closes when the guard drops (RAII, LIFO). A no-op when
 /// no `Profiler` has an active frame on the calling thread.
 #[macro_export]

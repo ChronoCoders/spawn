@@ -1,4 +1,4 @@
-//! Overlay data model — data only, no rendering. Assembled on demand from the
+//! Overlay data model, data only, no rendering. Assembled on demand from the
 //! profiler, a `RingBufferSink`, and a `MetricsRegistry`.
 
 use crate::log::sinks::{OwnedRecord, RingBufferSink};
@@ -44,7 +44,7 @@ pub struct DebugOverlayData {
 
 impl DebugOverlayData {
     /// Assemble overlay data from live sources. This is the one allocating call
-    /// in the overlay path and runs at most once per frame — not a steady-state
+    /// in the overlay path and runs at most once per frame, not a steady-state
     /// engine hot path.
     pub fn assemble(
         profiler: &Profiler,

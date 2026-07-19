@@ -9,10 +9,10 @@
 //!   refcount bump on the slot's single current payload `Arc`, taken under a
 //!   short read lock that is released before the caller uses the asset. The slot
 //!   stores exactly one payload `Arc` at a time. A hot-reload swaps a new `Arc`
-//!   into the slot under the write lock and **drops** the previous one — the old
+//!   into the slot under the write lock and **drops** the previous one, the old
 //!   data is freed once the last outstanding `get` clone is released, so no
 //!   superseded generation is retained. Existing handles observe the new payload
-//!   on their next `get` (the slot is reused in place — handles are never
+//!   on their next `get` (the slot is reused in place, handles are never
 //!   re-acquired).
 
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};

@@ -84,7 +84,7 @@ impl ReplicationClient {
         }
     }
 
-    /// The component registry — the game registers the same components, in the same
+    /// The component registry, the game registers the same components, in the same
     /// order, as the server (the manifest agreement).
     pub fn registry_mut(&mut self) -> &mut ReplicationRegistry {
         &mut self.registry

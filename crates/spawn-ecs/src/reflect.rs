@@ -9,7 +9,7 @@
 //! list of scalar leaf fields. Aggregates (`Vec3`, `Quat`, the transforms) are
 //! decomposed to their scalar leaves addressed by a dotted path
 //! (`"translation.x"`). Dispatch is through stored `fn` pointers (the private
-//! [`ReflectVtable`]), built once at registration — never `&dyn Reflect` in the
+//! [`ReflectVtable`]), built once at registration, never `&dyn Reflect` in the
 //! per-field path, and never per-access allocation.
 
 use std::error::Error;
@@ -19,7 +19,7 @@ use crate::component::{Component, ComponentId};
 use crate::entity::Entity;
 use crate::world::World;
 
-/// The type of a reflected scalar leaf — exactly the kinds the inspector renders.
+/// The type of a reflected scalar leaf: exactly the kinds the inspector renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
     F32,
@@ -206,7 +206,7 @@ impl ReflectRegistry {
         }
     }
 
-    /// Records `T`'s vtable at `id` (overwriting any prior entry — idempotent
+    /// Records `T`'s vtable at `id` (overwriting any prior entry, idempotent
     /// re-registration rebuilds the same vtable).
     pub(crate) fn insert<T: Reflect>(&mut self, id: ComponentId) {
         let index = id.index();

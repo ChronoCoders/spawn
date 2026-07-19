@@ -2,7 +2,7 @@
 //!
 //! Mirrors Slate's `UTransBuffer` (UE editor): edits between an explicit
 //! begin/end are grouped into one undoable composite, and transactions nest via
-//! an action counter — the outermost `end` is the only one that commits. Nesting
+//! an action counter, the outermost `end` is the only one that commits. Nesting
 //! flattens: every command captured at any depth lands in the single outermost
 //! transaction, so one undo reverts the whole gesture. The Phase 1 merge-on-drag
 //! is retained as the special case it is, applied within the captured list.
@@ -56,7 +56,7 @@ impl Command for CompositeCommand {
 
 /// The in-flight transaction: the captured (already-applied) commands, the
 /// nesting depth (the action counter), and the label of the outermost `begin`
-/// (nested labels are ignored — the first wins).
+/// (nested labels are ignored, the first wins).
 pub(crate) struct OpenTransaction {
     label: String,
     depth: u32,

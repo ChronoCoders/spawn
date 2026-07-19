@@ -113,8 +113,8 @@ impl Access {
     }
 
     /// Two systems conflict iff their component or resource access overlaps in a
-    /// read-write or write-write pair. Read-read sharing — on a component or a
-    /// resource — is non-conflicting.
+    /// read-write or write-write pair. Read-read sharing, on a component or a
+    /// resource, is non-conflicting.
     pub fn conflicts_with(&self, other: &Access) -> bool {
         self.writes.intersects(&other.writes)
             || self.writes.intersects(&other.reads)

@@ -487,7 +487,7 @@ impl Server {
     }
 
     /// Queue `bytes` to `client` on `channel`. Errors: `NoSuchClient`, `PayloadTooLarge`,
-    /// `ChannelFull` (reliable backpressure — the message is never silently dropped).
+    /// `ChannelFull` (reliable backpressure, the message is never silently dropped).
     pub fn send(&mut self, client: ClientId, channel: ChannelId, bytes: &[u8]) -> NetResult<()> {
         if bytes.len() > MAX_FRAGMENTED_PAYLOAD {
             return Err(NetError::PayloadTooLarge {

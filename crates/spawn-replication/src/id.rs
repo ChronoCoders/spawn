@@ -1,9 +1,9 @@
-//! `ReplId` — the dense, recycled replicated-entity id, and the bidirectional
+//! `ReplId`, the dense, recycled replicated-entity id, and the bidirectional
 //! `Entity` ↔ `ReplId` map kept on both ends.
 //!
 //! The id is the on-wire entity handle. The space is kept **dense** by recycling
 //! freed ids through a free-list, so the id space tracks the *peak concurrent live*
-//! count rather than the total ever spawned — which keeps the per-client visibility
+//! count rather than the total ever spawned, which keeps the per-client visibility
 //! bitsets (indexed by `ReplId`) compact (validated in the IM prototype, claim 5).
 //!
 //! The **server** allocates ids ([`allocate`](ReplIdMap::allocate)); the **client**
@@ -126,7 +126,7 @@ impl ReplIdMap {
         self.id_of.iter().map(|(&e, &id)| (e, id))
     }
 
-    /// The id-space high-water mark — the count to size `ReplId`-indexed bitsets to.
+    /// The id-space high-water mark, the count to size `ReplId`-indexed bitsets to.
     pub fn capacity(&self) -> usize {
         self.entity_of.len()
     }

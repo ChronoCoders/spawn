@@ -7,7 +7,7 @@ use std::fmt;
 #[non_exhaustive]
 pub enum AudioError {
     /// Surfaced by lower-level backend probing and in `Display`/logging only.
-    /// [`crate::AudioEngine::new`] never returns this — it falls back to a
+    /// [`crate::AudioEngine::new`] never returns this, it falls back to a
     /// [`crate::BackendKind::Null`] backend instead.
     DeviceUnavailable {
         context: &'static str,

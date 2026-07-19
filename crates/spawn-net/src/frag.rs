@@ -3,7 +3,7 @@
 //!
 //! A fragmented message is split into [`FRAGMENT_PAYLOAD`]-sized pieces, each sent as
 //! a `PacketType::Fragment` datagram whose body is a 6-byte [`FragmentHeader`] plus
-//! the piece. The normal sub-MTU path is untouched — only `send`/`broadcast` payloads
+//! the piece. The normal sub-MTU path is untouched, only `send`/`broadcast` payloads
 //! above a channel's single-datagram limit fragment. Reliability reuses the
 //! connection's existing per-packet acks (see `connection.rs`); the unreliable path is
 //! best-effort with a reassembly timeout.

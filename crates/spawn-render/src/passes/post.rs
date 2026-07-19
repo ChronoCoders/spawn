@@ -227,7 +227,7 @@ impl PostChain {
     }
 }
 
-/// A fullscreen pass reading `input` and writing `target` (load — the fullscreen
+/// A fullscreen pass reading `input` and writing `target` (load, the fullscreen
 /// triangle overwrites every pixel), no depth.
 fn fullscreen_pass(
     name: &'static str,

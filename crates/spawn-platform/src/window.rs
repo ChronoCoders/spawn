@@ -143,7 +143,7 @@ impl WindowConfig {
 }
 
 /// A live OS window. Created by the run loop; not constructible downstream and
-/// not `Clone`. Shared into [`crate::app::PlatformApp`] callbacks — as an owning
+/// not `Clone`. Shared into [`crate::app::PlatformApp`] callbacks, as an owning
 /// `Arc<Window>` to `init`, and by reference to the others.
 ///
 /// Implements [`HasWindowHandle`] and [`HasDisplayHandle`] so spawn-render can

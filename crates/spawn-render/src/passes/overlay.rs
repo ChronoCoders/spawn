@@ -4,7 +4,7 @@
 //! over) the existing color.
 //!
 //! UI positions are converted to clip space (NDC) on the CPU from the surface
-//! size, so the UI pipeline needs no screen uniform — only a texture group (the
+//! size, so the UI pipeline needs no screen uniform, only a texture group (the
 //! 1×1 white texture for solid rects/borders, or a font atlas for text). Lines
 //! are world-space and projected by the scene camera. Geometry is built into
 //! reused buffers (cleared, not freed), so a steady overlay allocates nothing.

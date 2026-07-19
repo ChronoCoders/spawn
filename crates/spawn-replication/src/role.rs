@@ -1,16 +1,16 @@
 //! The role triad. A replicated entity's role is *derived* per peer from ownership
-//! and locality — it is never stored on the entity.
+//! and locality, it is never stored on the entity.
 
 use spawn_net::ClientId;
 
 /// What a replicated entity is, from a given peer's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetRole {
-    /// The authoritative instance — always the server, for a replicated entity.
+    /// The authoritative instance, always the server, for a replicated entity.
     Authority,
-    /// The owning client's locally-controlled copy — eligible for prediction.
+    /// The owning client's locally-controlled copy, eligible for prediction.
     AutonomousProxy,
-    /// A non-owning client's copy — driven by interpolation/extrapolation.
+    /// A non-owning client's copy, driven by interpolation/extrapolation.
     SimulatedProxy,
 }
 

@@ -1,20 +1,20 @@
 //! Minimum-viable widget compositions over the retained [`UiTree`].
 //!
-//! These are the widgets the editor needs — [`Panel`], [`Label`], [`Button`],
-//! [`Checkbox`], [`DragValue`] — built as compositions over the Phase 1 tree, not
+//! These are the widgets the editor needs, [`Panel`], [`Label`], [`Button`],
+//! [`Checkbox`], [`DragValue`], built as compositions over the Phase 1 tree, not
 //! new tree primitives. A constructor creates styled nodes (and text/content);
 //! the per-frame query helpers read a drained [`UiEvent`] slice or the tree's
 //! retained hover/press state and allocate nothing. Widgets keep no state outside
 //! the tree: the caller owns the model values and the returned [`NodeId`]s.
 //!
-//! Drawing is unchanged — widgets emit only the existing [`DrawCommand`] variants
+//! Drawing is unchanged, widgets emit only the existing [`DrawCommand`] variants
 //! ([`DrawCommand::Text`] is rendered by the spawn-render text path).
 //!
 //! [`DrawCommand`]: crate::draw::DrawCommand
 //! [`DrawCommand::Text`]: crate::draw::DrawCommand::Text
 
 // Each widget is a zero-sized namespace whose `new` builds a tree node and
-// returns its `NodeId` (not `Self`) — the intended composition API, so the
+// returns its `NodeId` (not `Self`), the intended composition API, so the
 // `new`-returns-`Self` convention does not apply here.
 #![allow(clippy::new_ret_no_self)]
 
@@ -103,7 +103,7 @@ impl Button {
 /// A two-state toggle. The box outline is `style.border`; `style.background` is
 /// the check fill, shown by forcing its alpha to `1.0` when checked and `0.0`
 /// when unchecked (so the caller's chosen fill `rgb` is preserved across toggles
-/// and a single node both detects the click and shows the state — no covering
+/// and a single node both detects the click and shows the state, no covering
 /// child to steal the hit).
 pub struct Checkbox;
 
@@ -133,7 +133,7 @@ impl Checkbox {
 }
 
 /// A numeric field for the inspector: displays an `f32` and reports a horizontal
-/// drag delta while pressed. Exact text entry is deferred — drag-to-edit is the
+/// drag delta while pressed. Exact text entry is deferred: drag-to-edit is the
 /// MVP.
 pub struct DragValue;
 
@@ -160,7 +160,7 @@ impl DragValue {
 
     /// The horizontal value delta while `node` is under an active primary press,
     /// else `None`. The press state is the tree's retained
-    /// [`active`](UiTree::active) — a single frame's events cannot convey a held
+    /// [`active`](UiTree::active), a single frame's events cannot convey a held
     /// drag, so this reads the tree rather than an event slice. The caller scales
     /// the returned pixel delta into a value step. Allocation-free.
     pub fn drag_delta(

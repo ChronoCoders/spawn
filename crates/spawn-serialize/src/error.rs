@@ -5,7 +5,7 @@ use std::fmt;
 
 use spawn_core::SpawnError;
 
-/// A serialization failure. `Copy`, `&'static str` contexts — construction is
+/// A serialization failure. `Copy`, `&'static str` contexts, construction is
 /// allocation-free; never used to panic.
 ///
 /// `#[non_exhaustive]`: later phases may add variants (e.g. schema/versioning) via

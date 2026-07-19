@@ -18,7 +18,7 @@ mod sealed {
 pub trait Bundle: BundleWrite + sealed::Sealed + Send + Sync + 'static {}
 
 /// Placement logic for a [`Bundle`]. `#[doc(hidden)]` and not intended for
-/// external implementation — its signatures use crate-internal erased types,
+/// external implementation, its signatures use crate-internal erased types,
 /// and the [`sealed::Sealed`] supertrait keeps it crate-private in practice.
 #[doc(hidden)]
 pub trait BundleWrite: sealed::Sealed {

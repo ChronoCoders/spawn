@@ -1,5 +1,5 @@
 //! Relevancy-class marker components. Placing one of these on a `Replicated`
-//! entity is what assigns its relevancy class — and, in an archetype ECS, its
+//! entity is what assigns its relevancy class, and, in an archetype ECS, its
 //! archetype (validated stable under client churn, see the IM prototype results).
 //! These are engine-provided component types; the game inserts them on its entities.
 

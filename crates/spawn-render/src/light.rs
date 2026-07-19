@@ -2,7 +2,7 @@
 //!
 //! Honest 2b scope: **exactly one directional light and one shadow map** per
 //! frame. The API exposes no list of lights, so the bound is structural, not just
-//! documentary. No PBR, no cascades, no auto-fit — the light frustum is the
+//! documentary. No PBR, no cascades, no auto-fit: the light frustum is the
 //! configured orthographic box ([`ShadowConfig`]).
 
 use spawn_core::{Color, Mat4, Vec3, Vec4};

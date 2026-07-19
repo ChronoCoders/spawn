@@ -332,7 +332,7 @@ impl Replicator {
                 .copied()
                 .filter(|id| !spawns.contains(id))
                 .collect();
-            // Highest staleness (ticks since last sent) first — the priority accumulator.
+            // Highest staleness (ticks since last sent) first: the priority accumulator.
             u.sort_by_key(|id| {
                 std::cmp::Reverse(now_tick.wrapping_sub(*sc.last_sent.get(id).unwrap_or(&0)))
             });

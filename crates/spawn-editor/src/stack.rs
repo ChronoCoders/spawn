@@ -148,7 +148,7 @@ impl CommandStack {
     /// The outermost `end` commits the captured commands as a single composite
     /// undo entry (clearing redo and enforcing capacity); closing with no
     /// captured commands pushes nothing and is not an error. `world` is accepted
-    /// for API symmetry — the captured commands were already applied at execute
+    /// for API symmetry, the captured commands were already applied at execute
     /// time, so commit performs no world mutation. `NoOpenTransaction` if no
     /// transaction is open.
     pub fn end_transaction(&mut self, _world: &mut World) -> EditorResult<()> {

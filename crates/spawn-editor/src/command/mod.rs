@@ -10,7 +10,7 @@ use spawn_ecs::World;
 /// `apply` performs the edit and latches whatever revert state it needs (e.g.
 /// the prior value of a component it overwrites). `revert` exactly undoes the
 /// most recent `apply`, restoring the captured state. The pair must round-trip:
-/// `apply` then `revert` leaves the [`World`] observably identical — same live
+/// `apply` then `revert` leaves the [`World`] observably identical, same live
 /// entities, same component values. This is the core correctness invariant.
 ///
 /// `apply` takes `&mut self` because a command latches revert state on first
@@ -36,7 +36,7 @@ pub trait Command: 'static {
     /// Attempts to coalesce a subsequent command into `self` for continuous
     /// gestures (e.g. a drag emitting many moves per frame).
     ///
-    /// Returns `true` if `next` was absorbed — then `next` is dropped and never
+    /// Returns `true` if `next` was absorbed, then `next` is dropped and never
     /// pushed, so the whole gesture is one undo step. When absorbing, `self`
     /// adopts `next`'s new target value while retaining its own original
     /// captured revert state, so a single undo reverts the entire gesture. The

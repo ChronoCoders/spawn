@@ -3,7 +3,7 @@
 //! A query zips the SoA columns of every matching archetype. Items borrow
 //! directly into the columns through standard slice iterators: no per-item
 //! allocation, no intermediate buffer, no `unsafe`. Iteration order is
-//! deterministic — archetypes in [`ArchetypeId`](crate::archetype::ArchetypeId)
+//! deterministic: archetypes in [`ArchetypeId`](crate::archetype::ArchetypeId)
 //! order, rows in column order.
 
 pub mod filter;

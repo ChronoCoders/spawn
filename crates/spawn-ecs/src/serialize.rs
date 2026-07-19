@@ -1,7 +1,7 @@
 //! Component and whole-world serialization over the `spawn-serialize` bit codec.
 //!
 //! A component opts into [`SerializeComponent`] and is registered with the world,
-//! which assigns it a dense [`WireId`] in registration order — the wire contract a
+//! which assigns it a dense [`WireId`] in registration order, the wire contract a
 //! saved world and the world loading it must agree on. Entity-valued fields are
 //! written as raw `(index, generation)` via [`serialize_entity`] and remapped after
 //! load through [`MapEntities`] against an [`EntityMap`] keyed by the original

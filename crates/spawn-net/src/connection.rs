@@ -411,7 +411,7 @@ impl Connection {
         let mut sent = 0usize;
         // A transmit error must not discard the in-flight message (the reliable
         // invariant: it completes or the connection times out). On error we stop the
-        // burst, restore `out_frag`, and propagate — the message resends next flush.
+        // burst, restore `out_frag`, and propagate, the message resends next flush.
         let mut result = Ok(());
         for i in 0..of.count() {
             if sent >= FRAGMENT_BURST {

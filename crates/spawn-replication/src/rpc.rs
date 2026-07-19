@@ -2,7 +2,7 @@
 //! `spawn-net` `ReliableOrdered` channel (the driver, commit 7, multiplexes them with
 //! snapshots via the message-kind tag).
 //!
-//! - **Server** (client→server): only valid on an entity the sender **owns** — the
+//! - **Server** (client→server): only valid on an entity the sender **owns**, the
 //!   ownership gate ([`server_rpc_authorized`]) is the first line of anti-cheat. The
 //!   game still **validates** the payload server-side (the engine cannot know game
 //!   rules); this module provides routing + the gate, not gameplay validation.

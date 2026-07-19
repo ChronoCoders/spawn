@@ -5,7 +5,7 @@
 //! time to interpolate between (default delay = 2 snapshot intervals). Position uses
 //! **Hermite** interpolation with the transmitted linear velocity at the endpoints
 //! (velocity-continuous); orientation uses **slerp**. Interpolation is presentation
-//! only: it writes a separate [`InterpolatedTransform`] component (decision 6 — never
+//! only: it writes a separate [`InterpolatedTransform`] component (decision 6, never
 //! an override of the authoritative `Transform3D`).
 
 use std::collections::HashMap;

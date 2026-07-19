@@ -53,7 +53,7 @@ pub enum EcsError {
     },
     /// A whole-world (de)serialization codec failure (e.g. a truncated buffer).
     Serialize(spawn_serialize::SerializeError),
-    /// A loaded payload named a wire id not registered in this world — the
+    /// A loaded payload named a wire id not registered in this world, the
     /// registration-order-mismatch diagnostic.
     UnknownWireId {
         /// The unregistered on-wire component index.

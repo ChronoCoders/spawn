@@ -142,7 +142,7 @@ pub(crate) fn model_uniform(model: Mat4) -> ModelUniform {
 /// renderer's primary depth buffer as the depth attachment. `camera_offset` is
 /// the dynamic offset of this pass's camera slot (written by the graph executor
 /// before this call). Clears are applied per `clear_color`/`clear_depth`
-/// (`None` ⇒ load). Looks up each material's pipeline in the cache — never builds
+/// (`None` ⇒ load). Looks up each material's pipeline in the cache, never builds
 /// here; a miss is [`crate::error::RenderError::PipelineNotCached`]. No heap
 /// allocation occurs.
 pub(crate) fn record(

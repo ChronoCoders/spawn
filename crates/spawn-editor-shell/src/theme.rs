@@ -1,6 +1,6 @@
 //! The editor's single dark theme.
 //!
-//! A named ramp expressed as constants — no runtime theming. The accent
+//! A named ramp expressed as constants, no runtime theming. The accent
 //! (`#C1440E`) is reserved for selection/active/focus state only; everything else
 //! is neutral surface/text. Grounded in `docs/research/editor-design.md` §6.
 

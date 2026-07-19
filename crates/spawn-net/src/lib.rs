@@ -5,7 +5,7 @@
 //! Phase 1 scope: a byte-precise packet protocol, RFC 1982 sequence arithmetic, a
 //! salt-based connection handshake with keep-alive/timeout/disconnect, poll-driven
 //! [`Server`] and [`Client`], three delivery channels ([`ChannelId`]), and per-connection
-//! statistics. No threads, no async, no external crates — callers drive progress via
+//! statistics. No threads, no async, no external crates, callers drive progress via
 //! `poll`. See the crate spec for the normative wire format and security limits.
 
 pub mod ack;

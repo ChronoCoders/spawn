@@ -26,14 +26,14 @@ use crate::window::{Window, WindowConfig, WindowMode};
 ///
 /// `init` receives an owning `Arc<Window>` the app may keep; the other callbacks
 /// borrow the window and cannot store it. spawn-platform does not auto-close on
-/// `CloseRequested` — the app decides whether to exit by calling
+/// `CloseRequested`, the app decides whether to exit by calling
 /// [`Window::request_exit`](crate::Window::request_exit) from any callback; the
 /// loop then exits after the current iteration and fires [`exit`](PlatformApp::exit) once.
 pub trait PlatformApp {
     /// Called once after the window is created and before the first event.
     ///
     /// Receives the window as an `Arc<Window>` (not a borrow) so the app can keep
-    /// it alive past the callback — e.g. to hand it to spawn-render as a
+    /// it alive past the callback, e.g. to hand it to spawn-render as a
     /// surface-owning handle. The subsequent callbacks borrow the window instead.
     fn init(&mut self, window: Arc<Window>);
 

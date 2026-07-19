@@ -221,7 +221,7 @@ impl RenderGraph {
         }
     }
 
-    /// Derives execution order, transient lifetimes, and the aliasing plan — pure
+    /// Derives execution order, transient lifetimes, and the aliasing plan: pure
     /// CPU, no GPU. Errors on a cycle, an unproduced read, or a dangling transient.
     /// Crate-private: the public surface is `compile` plus `CompiledGraph`'s
     /// memory accessors (spec §2); `plan` exists so the derivation is unit-tested
@@ -341,7 +341,7 @@ impl RenderGraph {
             resource_pool[t.resource.index()] = Some(t.region);
         }
         // A graph with a shadow pass binds group 2 (light uniform + shadow map +
-        // comparison sampler) once, here at compile/resize — never per frame. The
+        // comparison sampler) once, here at compile/resize, never per frame. The
         // shadow map is the shadow pass's depth target in the transient pool.
         let light_bind_group = self
             .passes
@@ -513,7 +513,7 @@ fn allocate_pool(renderer: &Renderer, regions: &[RegionSpec]) -> Vec<PoolTexture
 }
 
 /// The derived plan: execution order, transient lifetimes, and the aliasing
-/// memory accounting. Pure data — produced without a GPU. Crate-private; the
+/// memory accounting. Pure data, produced without a GPU. Crate-private; the
 /// memory accounting is exposed on `CompiledGraph` (spec §2).
 struct GraphPlan {
     order: Vec<usize>,
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn disjoint_lifetimes_alias_into_one_region() {
         // p0 writes T1, p1 reads T1, p2 writes T2, p3 reads T2, p4 writes surface.
-        // T1 lifetime [0,1], T2 lifetime [2,3] — disjoint, same spec → one region.
+        // T1 lifetime [0,1], T2 lifetime [2,3], disjoint, same spec → one region.
         let mut g = RenderGraph::new();
         let t1 = g.transient(color("t1"));
         let t2 = g.transient(color("t2"));

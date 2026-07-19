@@ -1,6 +1,6 @@
 //! `AssetId`-keyed GPU resource registry: resolves the engine's draw proxies
 //! (`mesh: AssetId`, `material: AssetId`) to the owned `Mesh`/`Material` GPU
-//! resources to draw with. Holds already-built resources — the app constructs a
+//! resources to draw with. Holds already-built resources: the app constructs a
 //! `Mesh`/`Material` (Phase 1 constructors) from its data and registers it.
 //! Mesh/material *file-format* loading is out of scope (spawn-asset/spawn-build).
 
@@ -53,7 +53,7 @@ impl RenderResources {
     }
 
     /// Resolves a `(mesh, material)` id pair, or `None` if either is unregistered
-    /// (the caller skips that draw — content not yet uploaded is never fatal).
+    /// (the caller skips that draw, content not yet uploaded is never fatal).
     pub fn resolve(&self, mesh: AssetId, material: AssetId) -> Option<(&Mesh, &Material)> {
         Some((self.meshes.get(&mesh)?, self.materials.get(&material)?))
     }

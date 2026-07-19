@@ -28,7 +28,7 @@ fn bound_radius(transform: &Transform3D) -> f32 {
     (max_axis * 0.6).max(0.25)
 }
 
-/// Ray–sphere intersection: the nearest non-negative parameter `t` at which `ray`
+/// Ray-sphere intersection: the nearest non-negative parameter `t` at which `ray`
 /// meets the sphere `(center, radius)`, or `None`. `ray.direction` is unit length.
 fn ray_sphere(ray: Ray, center: Vec3, radius: f32) -> Option<f32> {
     let oc = ray.origin - center;

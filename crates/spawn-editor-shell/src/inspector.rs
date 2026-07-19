@@ -174,7 +174,7 @@ pub fn refresh_values(tree: &mut UiTree, world: &World, entity: Entity, rows: &[
 
 /// Applies a `DragValue` edit: the field's current value plus `delta` (already
 /// scaled by the caller). Routed through `execute_merged`, so consecutive edits
-/// of the same `(entity, component, field)` — a continuous drag — coalesce into
+/// of the same `(entity, component, field)`, a continuous drag, coalesce into
 /// one undo entry (the merge is the Phase 1 special case of a transaction); a
 /// discrete edit is one entry too. Bool rows are toggled via [`apply_bool`].
 pub fn apply_scalar_delta(

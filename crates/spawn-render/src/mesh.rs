@@ -39,7 +39,7 @@ impl Vertex {
 }
 
 /// Skinned mesh vertex: the [`Vertex`] fields (position/normal/uv) plus four
-/// joint influences — `joints` (indices into the skeleton) and `weights` (assumed
+/// joint influences: `joints` (indices into the skeleton) and `weights` (assumed
 /// normalized by the loader). `#[repr(C)]` + `Pod`; layout asserted below.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

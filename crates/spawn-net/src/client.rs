@@ -442,7 +442,7 @@ impl Client {
     }
 
     /// Queue `bytes` to the server on `channel`. Errors: `NotConnected`, `PayloadTooLarge`,
-    /// `ChannelFull` (reliable backpressure — the message is never silently dropped).
+    /// `ChannelFull` (reliable backpressure, the message is never silently dropped).
     pub fn send(&mut self, channel: ChannelId, bytes: &[u8]) -> NetResult<()> {
         if self.state != ClientState::Connected {
             return Err(NetError::NotConnected);

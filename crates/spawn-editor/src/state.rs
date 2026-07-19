@@ -72,7 +72,7 @@ impl EditorState {
     /// Restore contract (see [`exit_play`](EditorState::exit_play)): because only
     /// `Transform3D` is snapshotted, non-`Transform3D` components added during
     /// play to surviving entities are RETAINED after `exit_play`, and pre-play
-    /// entities despawned during play are respawned with `Transform3D` only —
+    /// entities despawned during play are respawned with `Transform3D` only,
     /// their other pre-play components are lost.
     pub fn enter_play(&mut self, world: &mut World) -> EditorResult<()> {
         if self.mode == EditorMode::Play {
@@ -99,7 +99,7 @@ impl EditorState {
     /// `Transform3D` of surviving entities to their pre-play values. Components
     /// other than `Transform3D` added during play to surviving entities are
     /// RETAINED (the snapshot cannot revert what it never captured); re-spawned
-    /// entities get `Transform3D` only — their other pre-play components are
+    /// entities get `Transform3D` only, their other pre-play components are
     /// lost. After restore, [`Selection::retain_live`] reconciles the selection
     /// against the restored world (dropping entities whose ids did not survive).
     pub fn exit_play(&mut self, world: &mut World) -> EditorResult<()> {

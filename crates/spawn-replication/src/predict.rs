@@ -9,8 +9,8 @@
 //! **Snap-only is the Phase 2d baseline (decision 4):** reconciliation snaps to
 //! authoritative without replaying inputs, until `spawn-ecs` change detection (and the
 //! deterministic fixed-tick guarantee) lands. [`replay`] is provided for when replay is
-//! enabled — it re-applies the unacked inputs on top of the authoritative state via a
-//! game-supplied step — but it is not invoked by the snap-only baseline. The visual
+//! enabled, it re-applies the unacked inputs on top of the authoritative state via a
+//! game-supplied step, but it is not invoked by the snap-only baseline. The visual
 //! error correction ([`PredictionSmoother`]) applies in both modes.
 
 use std::collections::VecDeque;

@@ -220,7 +220,7 @@ mod tests {
         let t = ray_axis_handle_hit(hit, Vec3::ZERO, Axis::X, 5.0, 0.25).unwrap();
         assert!(t.approx_eq_default(1.0));
 
-        // Offset in Z so the closest approach is 0.3 away — outside a 0.1 radius.
+        // Offset in Z so the closest approach is 0.3 away, outside a 0.1 radius.
         let miss_far = Ray {
             origin: Vec3::new(1.0, 1.0, 0.3),
             direction: Vec3::NEG_Y,

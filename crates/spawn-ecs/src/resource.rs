@@ -3,7 +3,7 @@
 //!
 //! Each resource is stored behind a `std::sync::RwLock<T>`. A scheduled system
 //! holds only `&World`, shared across the scoped threads of a batch, so handing
-//! out `&mut T` in safe Rust requires `Sync` interior mutability — this is the
+//! out `&mut T` in safe Rust requires `Sync` interior mutability. This is the
 //! deliberate alternative to an `unsafe` cell projection, keeping the crate at
 //! zero `unsafe`. The scheduler's conflict relation guarantees the lock is never
 //! contended (a `ResMut<T>` system is alone in its batch), so it never blocks;

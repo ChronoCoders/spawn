@@ -2,7 +2,7 @@
 //!
 //! Columns are stored as `Box<dyn ComponentColumn>` wrapping a `Vec<T>`; all
 //! type erasure is done with safe `Any` downcasts and ordinary function
-//! pointers — no `unsafe`.
+//! pointers, no `unsafe`.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;

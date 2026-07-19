@@ -7,7 +7,7 @@
 //! through interest-filtered, delta-compressed snapshots, while routing client input
 //! and ownership-gated RPCs back to the server. It owns *mechanism*; the game owns
 //! *policy* (which components replicate, RPC semantics + validation, ownership
-//! assignment, relevancy parameters). Driven once per fixed tick — no threads, no
+//! assignment, relevancy parameters). Driven once per fixed tick, no threads, no
 //! async, no internal clock.
 //!
 //! This first module set establishes the identity and classification layer: the dense

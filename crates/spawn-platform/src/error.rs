@@ -10,7 +10,7 @@ use std::fmt;
 /// Errors raised by windowing, the event loop, and monitor enumeration.
 ///
 /// `#[non_exhaustive]`: later phases may add variants, so matches must include a
-/// wildcard arm. `context` is `&'static str` by design — error construction must
+/// wildcard arm. `context` is `&'static str` by design, error construction must
 /// not allocate. Not `Clone`/`PartialEq`.
 #[derive(Debug)]
 #[non_exhaustive]

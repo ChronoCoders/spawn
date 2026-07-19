@@ -1,6 +1,6 @@
 //! Deterministic, parallel system scheduling.
 //!
-//! A [`Stage`] holds systems in registration order — the canonical total order
+//! A [`Stage`] holds systems in registration order, the canonical total order
 //! used for conflict resolution and command-application order. `build`
 //! greedily partitions systems into batches: a system joins the current batch
 //! iff it conflicts with none already in it, else it opens a new batch. Batches
@@ -284,7 +284,7 @@ impl Stage {
             let batch_len = self.batches[batch_idx].len();
             if batch_len == 1 {
                 // Single-system batch: run inline with no scoped thread and no
-                // temporary collection — keeps the steady-state run allocation
+                // temporary collection, keeps the steady-state run allocation
                 // free. Panics are caught and surfaced like the parallel path.
                 let sys_idx = self.batches[batch_idx][0];
                 if !active[sys_idx] {
@@ -521,7 +521,7 @@ impl Schedule {
     /// boundary so a later stage observes earlier structural changes. After the
     /// first build/run, no allocation occurs in this path. After all stages
     /// complete, swaps every event double buffer once
-    /// ([`World::update_events`](World::update_events)) — the single end-of-frame
+    /// ([`World::update_events`](World::update_events)), the single end-of-frame
     /// stage boundary. A system error aborts the failing stage (after its batch
     /// joins) and is returned; that stage's pending command buffers are discarded
     /// and the event swap is skipped for that frame.

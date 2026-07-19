@@ -6,7 +6,7 @@ use std::fmt;
 use spawn_core::SpawnError;
 use spawn_serialize::SerializeError;
 
-/// A replication failure. `Copy`, `&'static str` contexts — construction is
+/// A replication failure. `Copy`, `&'static str` contexts, construction is
 /// allocation-free; never used to panic.
 ///
 /// `#[non_exhaustive]`: later modules (prediction, RPC, drivers) add variants via the
@@ -40,7 +40,7 @@ pub enum ReplError {
         context: &'static str,
     },
     /// A `spawn-net` transport error surfaced while sending/polling (the underlying
-    /// `NetError` is not retained — it is not `Copy` — only the failure class).
+    /// `NetError` is not retained, it is not `Copy`, only the failure class).
     Transport {
         /// Failure-class context.
         context: &'static str,

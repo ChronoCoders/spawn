@@ -80,7 +80,7 @@ pub fn hash_reader<R: Read>(reader: &mut R, chunk: &mut [u8]) -> BuildResult<u64
 /// Canonical relative path string for `path` inside `source_root`.
 ///
 /// Strips the `source_root` prefix, then delegates to spawn-asset's
-/// [`spawn_asset::id::canonicalize`] — the SAME function the runtime uses —
+/// [`spawn_asset::id::canonicalize`], the SAME function the runtime uses,
 /// so a path baked here and a path loaded by spawn-asset yield the same
 /// `AssetId` by construction, not by mirrored reimplementation. Returns
 /// [`BuildError::PathEscapesRoot`] if the path lies outside `source_root` or

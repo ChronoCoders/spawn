@@ -7,7 +7,7 @@ use crate::error::{UiError, UiResult};
 use crate::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent};
 use crate::tree::{NodeId, UiTree};
 
-/// Intrinsic text sizing hook — the only text-measurement injection point in
+/// Intrinsic text sizing hook: the only text-measurement injection point in
 /// Phase 1.
 pub trait TextMeasure {
     /// Returns the intrinsic size of `text`. `max_width` is `Some` when the
@@ -115,7 +115,7 @@ impl UiTree {
 
     /// Clears dirty flags over the dirty region only. A clean node already has a
     /// clean subtree (a dirty mark always propagates fully downward, §6), so the
-    /// walk stops there — keeping the clear pass O(dirty), not O(total).
+    /// walk stops there, keeping the clear pass O(dirty), not O(total).
     fn clear_dirty(&mut self, node: NodeId) {
         let children = match self.resolve_mut(node) {
             Some(n) if n.dirty => {
@@ -133,7 +133,7 @@ impl UiTree {
     /// parent's relevant axes. `Percent` self-sizes contribute `0` here.
     ///
     /// A clean node (no dirty mark since the last layout) returns its cached
-    /// intrinsic without descending — any change to this node, its style/text,
+    /// intrinsic without descending, any change to this node, its style/text,
     /// or any descendant would have propagated a dirty mark up to it (§6), so a
     /// surviving clean cache is guaranteed current.
     fn measure_intrinsic(&mut self, node: NodeId, measure: &mut dyn TextMeasure) -> Vec2 {
@@ -455,7 +455,7 @@ impl UiTree {
             // resolved border box moved/resized, must be re-arranged so the
             // change ripples through its descendants. Layout is deterministic
             // and unrounded (§4.3), so an unchanged input reproduces a
-            // bit-identical box — exact equality is the correct skip predicate.
+            // bit-identical box, exact equality is the correct skip predicate.
             let skip = match self.resolve(id) {
                 Some(n) => !n.dirty && n.rect == Some(child_box),
                 None => true,

@@ -19,7 +19,7 @@ fn translation(model: Mat4) -> Vec3 {
 /// Fills `scratch` with `(squared_distance, index)` for indices `0..count` and
 /// sorts it back-to-front: descending squared distance from `eye`, ties broken by
 /// ascending index (so the order is deterministic without a stable sort). Pure and
-/// allocation-free once `scratch` has capacity — the renderer reuses one buffer.
+/// allocation-free once `scratch` has capacity, the renderer reuses one buffer.
 pub(crate) fn order_back_to_front(
     eye: Vec3,
     count: u32,

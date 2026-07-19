@@ -3,7 +3,7 @@
 //! A snapshot is, for one client: the visibility delta (despawns/spawns) plus a state
 //! delta for visible entities, encoded with `spawn-serialize` and delta-compressed
 //! against the most recent snapshot the client acked. The delta is **per serialize
-//! unit** (each `serialize_bits`/`serialize_bool` call — i.e. each field): a 1-bit
+//! unit** (each `serialize_bits`/`serialize_bool` call, i.e. each field): a 1-bit
 //! changed marker, and the value only when it differs from the baseline. Spawns carry
 //! the full (absolute) component set; updates carry deltas. Section membership uses a
 //! 1-bit continue marker per entry so a budget-truncated section ends cleanly.
@@ -44,7 +44,7 @@ const COMPONENT_SCRATCH: usize = 256;
 const MAX_SPAWN_REPL_ID: u32 = 1 << 20;
 
 /// Peek a snapshot's tick and the baseline tick it was encoded against, without
-/// decoding the body — the client uses the baseline tick to select the baseline state
+/// decoding the body, the client uses the baseline tick to select the baseline state
 /// to pass to [`decode_snapshot`].
 pub fn peek_snapshot_header(input: &[u8]) -> ReplResult<(u32, Option<u32>)> {
     let mut r = BitReader::new(input);
@@ -263,7 +263,7 @@ pub fn encode_snapshot(
     }
     bw.write_bool(false)?;
 
-    // Spawns (absolute, all included — a newly-visible entity needs its full baseline).
+    // Spawns (absolute, all included: a newly-visible entity needs its full baseline).
     for &id in spawns {
         let Some(entity) = ids.entity(id) else {
             continue;

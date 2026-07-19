@@ -9,7 +9,7 @@
 //!
 //! Volume is linear amplitude `0.0..=1.0` at every public boundary (clamped, not
 //! rejected); decibels appear only in [`params::db_to_amplitude`] /
-//! [`params::amplitude_to_db`]. No kira type appears in any public signature —
+//! [`params::amplitude_to_db`]. No kira type appears in any public signature,
 //! kira is confined to the private `backend` module.
 
 mod backend;

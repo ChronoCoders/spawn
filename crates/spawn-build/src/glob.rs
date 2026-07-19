@@ -25,7 +25,7 @@ enum Segment {
 /// Exactly two wildcards are supported and this subset is frozen for Phase 1:
 /// `*` matches any run of zero or more characters *within one segment* (never
 /// crossing `/`); `**` matches zero or more *whole* segments. `**` is only valid
-/// as a complete segment — a `**` adjacent to other characters (e.g. `a**b`) is
+/// as a complete segment, a `**` adjacent to other characters (e.g. `a**b`) is
 /// rejected at compile time. Matching is full-path anchored and case-sensitive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pattern {

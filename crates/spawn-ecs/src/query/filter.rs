@@ -2,7 +2,7 @@
 //! [`Added`] / [`Changed`] change-detection filters.
 //!
 //! Presence filters constrain which archetypes match but never contribute to
-//! read/write access sets — they require only presence or absence, not data
+//! read/write access sets, they require only presence or absence, not data
 //! access. Change filters additionally evaluate a per-row tick against the
 //! querying system's last-run tick (see [`crate::change::Tick`]). A filter on an
 //! unregistered component matches nothing (`With`/`Added`/`Changed`) or every
@@ -34,7 +34,7 @@ pub struct Changed<T: Component>(PhantomData<fn() -> T>);
 /// Archetype presence/absence constraint, optionally refined per row. Sealed.
 pub trait QueryFilter: sealed::Sealed {
     /// Whether this filter needs per-row evaluation. `false` for `()`, `With`,
-    /// `Without`, and tuples of those — the iterators then skip the per-row check
+    /// `Without`, and tuples of those, the iterators then skip the per-row check
     /// entirely (the allocation-free fast path).
     const NEEDS_ROW_FILTER: bool = false;
 

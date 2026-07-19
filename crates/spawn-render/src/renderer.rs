@@ -88,7 +88,7 @@ impl Default for RendererConfig {
 ///
 /// Drop order follows field order: fallback texture, camera/model resources,
 /// cache/shaders/layouts, depth view/texture, surface config, surface, queue,
-/// device, adapter, instance. Engine wrappers do no manual GPU teardown — wgpu
+/// device, adapter, instance. Engine wrappers do no manual GPU teardown, wgpu
 /// frees on drop.
 pub struct Renderer<'w> {
     pub(crate) device: Arc<wgpu::Device>,
@@ -329,7 +329,7 @@ impl<'w> Renderer<'w> {
             make_camera_bind_group(&device, &layouts.camera, &camera_buffer, &model_buffer);
 
         // The lit and shadow shaders are engine built-ins, compiled once and their
-        // pipelines built here at construction — never per frame. The lit pass
+        // pipelines built here at construction, never per frame. The lit pass
         // shades every draw with one pipeline (materials supply group 1); the
         // shadow pass renders depth-only into the shadow map.
         let mut shaders = ShaderStore::new();
@@ -894,7 +894,7 @@ impl<'w> Renderer<'w> {
     }
 
     /// Ensures the per-pass camera buffer holds at least `count` slots,
-    /// reallocating (and rebuilding the camera bind group) only on growth — never
+    /// reallocating (and rebuilding the camera bind group) only on growth, never
     /// in steady state once capacity covers the largest graph's pass count.
     pub(crate) fn ensure_camera_capacity(&mut self, count: u32) {
         if count <= self.camera_capacity {
@@ -922,7 +922,7 @@ impl<'w> Renderer<'w> {
 
     /// Ensures the per-draw model buffer holds at least `count` entries,
     /// reallocating (and rebuilding the camera bind group) only on growth. Growth
-    /// happens at most a logarithmic number of times and never in steady state —
+    /// happens at most a logarithmic number of times and never in steady state,
     /// once capacity covers the largest frame it is retained.
     pub(crate) fn ensure_model_capacity(&mut self, count: u32) {
         if count <= self.model_capacity {
@@ -1060,7 +1060,7 @@ impl<'w> Renderer<'w> {
     }
 
     /// Ensures the instance storage buffer holds at least `count` entries,
-    /// reallocating (and rebuilding the instance bind group) only on growth — never
+    /// reallocating (and rebuilding the instance bind group) only on growth, never
     /// in steady state once capacity covers the largest frame's instance count.
     pub(crate) fn ensure_instance_capacity(&mut self, count: u32) {
         if count <= self.instance_capacity {

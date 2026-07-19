@@ -1,7 +1,7 @@
 //! Pipeline cache and shader store.
 //!
 //! `wgpu::RenderPipeline` is created exactly once per [`PipelineKey`], in
-//! [`PipelineCache::get_or_create`], at startup or asset load — never per frame.
+//! [`PipelineCache::get_or_create`], at startup or asset load, never per frame.
 //! `wgpu::ShaderModule` is compiled exactly once per [`ShaderHandle`], in
 //! [`ShaderStore::load`]. Per-frame code only reads via [`PipelineCache::get`];
 //! a draw against an uncached pipeline is [`RenderError::PipelineNotCached`].
@@ -23,7 +23,7 @@ use crate::skeleton::GpuJoint;
 /// different vertex inputs are distinct entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VertexLayoutId {
-    /// The 3D mesh vertex (position/normal/uv) — forward and shadow passes.
+    /// The 3D mesh vertex (position/normal/uv), forward and shadow passes.
     PositionNormalUv,
     /// The skinned mesh vertex (position/normal/uv + joint indices/weights). Its
     /// pipelines bind the joint storage group and read per-vertex joint matrices.
@@ -158,7 +158,7 @@ pub struct BindGroupLayouts {
     pub light: wgpu::BindGroupLayout,
     /// Group 1 of the `ForwardPbr` pass: the [`PbrMaterialUniform`] at binding 0
     /// plus the five metallic-roughness `(texture, sampler)` pairs (base-color,
-    /// metallic-roughness, normal, emissive, occlusion) at bindings 1–10. Absent
+    /// metallic-roughness, normal, emissive, occlusion) at bindings 1-10. Absent
     /// maps bind the renderer's typed fallbacks so the layout is always satisfied.
     pub pbr_material: wgpu::BindGroupLayout,
     /// Group 0 of a single-input fullscreen post pass: a float input texture at
@@ -481,7 +481,7 @@ impl PipelineCache {
 
     /// Returns the pipeline for `key`, building and caching it on a miss. The
     /// only constructor of `wgpu::RenderPipeline`. Call at startup/asset-load,
-    /// not per frame. `Err(ShaderCompile)`-shaped failures cannot occur here —
+    /// not per frame. `Err(ShaderCompile)`-shaped failures cannot occur here:
     /// the module must already be in `shaders` (compiled via
     /// [`ShaderStore::load`]); a missing module yields
     /// [`RenderError::PipelineNotCached`] for `key`.
@@ -502,7 +502,7 @@ impl PipelineCache {
             // depth-only (group 0, no fragment, no color target); lit binds the
             // light group; opaque is unlit; the overlay's UI pipeline binds only a
             // texture group (group 0) while its line pipeline reuses the camera
-            // group. wgpu inserts all barriers — the layout here only declares the
+            // group. wgpu inserts all barriers, the layout here only declares the
             // resource interface.
             let base_layouts: &[&wgpu::BindGroupLayout] = match key.pass {
                 PassKind::ForwardOpaque => &[&layouts.camera, &layouts.material],
@@ -585,7 +585,7 @@ impl PipelineCache {
                 blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })];
-            // The shadow pass writes depth only — no fragment stage, no color
+            // The shadow pass writes depth only: no fragment stage, no color
             // attachment.
             let fragment = match key.pass {
                 PassKind::ShadowDepth => None,

@@ -1,7 +1,7 @@
 //! The [`NullBackend`]: a fully state-tracking no-op device used when the OS
 //! audio device cannot be opened. Every operation is accepted and succeeds;
-//! playback produces no sound. Voices never auto-finish — they end only via an
-//! explicit stop — so voice accounting matches the device backend's
+//! playback produces no sound. Voices never auto-finish, they end only via an
+//! explicit stop, so voice accounting matches the device backend's
 //! caller-driven lifecycle for game logic that depends on handle state.
 
 use crate::bus::BusId;

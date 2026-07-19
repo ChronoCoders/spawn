@@ -2,7 +2,7 @@
 
 //! Headless editor framework of the Spawn engine: the data model and command
 //! infrastructure that the visual editor drives. No rendering, window, widget,
-//! or input handling lives here — this crate is pure logic over a
+//! or input handling lives here, this crate is pure logic over a
 //! [`spawn_ecs::World`] it does not own.
 
 pub mod command;

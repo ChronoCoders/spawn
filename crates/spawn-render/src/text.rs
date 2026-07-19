@@ -4,7 +4,7 @@
 //! The Overlay2D pass (a later module) draws `spawn_ui`'s `DrawCommand::Text` by
 //! sampling this atlas; here we own only the GPU resource and the CPU metrics.
 //! The baseline font is an embedded 8×8 bitmap covering printable ASCII
-//! (`0x20`–`0x7F`), so there is no font-file dependency and no new crate
+//! (`0x20`-`0x7F`), so there is no font-file dependency and no new crate
 //! dependency. Vector/TTF rasterization is deferred (it needs a glyph-rasterizer
 //! crate); the [`Font`] API is shaped so it can slot in without changing callers.
 //!
@@ -184,7 +184,7 @@ fn raster_atlas() -> Vec<u8> {
     pixels
 }
 
-/// Public-domain `font8x8` basic set for `0x20`–`0x7F` (96 glyphs). 8 rows × 8
+/// Public-domain `font8x8` basic set for `0x20`-`0x7F` (96 glyphs). 8 rows × 8
 /// bits each; bit 0 (LSB) is the leftmost column, row 0 the top. `0x7F` is blank.
 #[rustfmt::skip]
 const GLYPHS: [[u8; 8]; 96] = [

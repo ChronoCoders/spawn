@@ -1,7 +1,7 @@
 //! Double-buffered events: `Events<T>` (a resource), `EventWriter<T>`, and
 //! `EventReader<T>`.
 //!
-//! `Events<T>` keeps two buffers — this frame's and the previous frame's —
+//! `Events<T>` keeps two buffers, this frame's and the previous frame's,
 //! swapped once per frame at the end-of-run stage boundary
 //! ([`World::update_events`](crate::world::World::update_events), driven by
 //! [`Schedule::run`](crate::schedule::Schedule::run)). An event sent in frame N

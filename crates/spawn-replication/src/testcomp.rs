@@ -7,7 +7,7 @@ use spawn_serialize::{Serialize, SerializeResult, Stream};
 use crate::registry::Replicate;
 
 /// A small replicated component: two raw `f32`s (sent bit-exact so tests can assert
-/// equality) and a bool — exercises both `serialize_bits` and `serialize_bool`.
+/// equality) and a bool, exercises both `serialize_bits` and `serialize_bool`.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct TPos {
     pub x: f32,

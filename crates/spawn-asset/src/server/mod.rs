@@ -4,8 +4,8 @@
 //! Threading contract: `load`, `get`, `load_state`, `error`,
 //! `reborrow_or_load`, and `drain_reload_events` are cheap and may be called
 //! between frames; none of them mutate asset state visible to `get`. All such
-//! mutation — committing loaded/failed payloads, applying hot-reload
-//! replacements, and freeing unloaded slots — happens only inside
+//! mutation, committing loaded/failed payloads, applying hot-reload
+//! replacements, and freeing unloaded slots, happens only inside
 //! `apply_loaded`, which is expected to run once per frame on the main thread.
 
 mod pool;
@@ -227,7 +227,7 @@ impl AssetServer {
     /// Returns a clone of the payload `Arc` only when the asset is `Loaded`;
     /// `None` for every other state. Lock-light: a single shard-free read lock on
     /// the handle's own slot, an `Arc` refcount bump, no payload copy. The
-    /// returned `Arc` is a stable snapshot — a concurrent reload swap leaves it
+    /// returned `Arc` is a stable snapshot, a concurrent reload swap leaves it
     /// pointing at the data it observed.
     pub fn get<T: Asset>(&self, handle: &Handle<T>) -> Option<Arc<T>> {
         handle.slot().payload()

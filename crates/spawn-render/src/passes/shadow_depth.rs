@@ -1,6 +1,6 @@
 //! The shadow caster pass: renders the scene depth-only from the light's
 //! orthographic camera into the shadow map. No color attachment, no material or
-//! light binds — only group 0 (the light view-projection in this pass's camera
+//! light binds, only group 0 (the light view-projection in this pass's camera
 //! slot, plus the per-draw model). The lit pass samples the resulting depth.
 
 use crate::error::RenderResult;

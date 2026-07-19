@@ -478,7 +478,7 @@ impl World {
     }
 
     /// Registers an event type `T`: inserts an empty `Events<T>` resource (if
-    /// absent) and records its per-frame updater. Idempotent — a second call is a
+    /// absent) and records its per-frame updater. Idempotent, a second call is a
     /// no-op. `EventWriter<T>`/`EventReader<T>` require this before schedule build.
     pub fn init_event<T: Event>(&mut self) {
         if self.contains_resource::<crate::events::Events<T>>() {

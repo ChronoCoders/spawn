@@ -2,7 +2,7 @@
 //! indices and inverse-bind matrices, plus the pure skin-matrix composition that
 //! turns a local pose into the per-joint matrices uploaded to the GPU.
 //!
-//! This hierarchy is internal to the skeleton — it is **not** the ECS
+//! This hierarchy is internal to the skeleton, it is **not** the ECS
 //! `Parent`/`Children` hierarchy. The engine attaches a skinned-mesh *entity*
 //! under a parent via the 3a hierarchy; a skeleton's *bones* are this array.
 

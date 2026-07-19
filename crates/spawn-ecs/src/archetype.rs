@@ -4,7 +4,7 @@
 //! Rows move between archetypes on `insert`/`remove` via swap-remove + push of
 //! boxed values; layout and columns are private internals. Per-row change-detection
 //! ticks ([`ArchetypeTicks`]) are stored in the [`ArchetypeStore`] parallel to the
-//! archetypes — not inside the type-erased column — so a filtered `iter_mut` can
+//! archetypes, not inside the type-erased column, so a filtered `iter_mut` can
 //! read ticks (shared) while mutating columns (exclusive) without `unsafe`.
 
 use crate::change::Tick;
@@ -69,7 +69,7 @@ impl Archetype {
     /// Returns the entities slice together with the `wanted` component columns
     /// (each `Some` if present), borrowed disjointly. Entities come from a separate
     /// field, so a mutable tuple query can read entity ids while holding mutable
-    /// column borrows — all without `unsafe`.
+    /// column borrows, all without `unsafe`.
     pub(crate) fn entities_and_columns_mut<const N: usize>(
         &mut self,
         wanted: [Option<ComponentId>; N],
@@ -214,7 +214,7 @@ impl ArchetypeStore {
     }
 
     /// Disjoint split borrow of the archetypes (mutable, for column access) and
-    /// their ticks (shared, for change filtering) — the seam that lets a filtered
+    /// their ticks (shared, for change filtering), the seam that lets a filtered
     /// `iter_mut` evaluate ticks while mutating columns without `unsafe`.
     pub(crate) fn archetypes_and_ticks_mut(&mut self) -> (&mut [Archetype], &[ArchetypeTicks]) {
         (&mut self.archetypes, &self.ticks)
@@ -236,7 +236,7 @@ impl ArchetypeStore {
         }
     }
 
-    /// Stamps the changed tick of `component` on every row of the archetype —
+    /// Stamps the changed tick of `component` on every row of the archetype,
     /// the conservative mutable-access stamp applied when an exclusive iterator
     /// over that column is created.
     pub(crate) fn stamp_changed_all(

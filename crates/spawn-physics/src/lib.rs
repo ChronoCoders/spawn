@@ -10,7 +10,7 @@
 //!
 //! Determinism: Rapier's `enhanced-determinism` is enabled on both backends so
 //! the fixed-step substrate is bit-for-bit reproducible across platforms given
-//! identical insertion order and per-tick inputs — the foundation spawn-net's
+//! identical insertion order and per-tick inputs, the foundation spawn-net's
 //! rollback netcode replays.
 
 #[cfg(not(any(feature = "dim2", feature = "dim3")))]
